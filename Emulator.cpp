@@ -15,6 +15,8 @@ public:
 	
 	uint32_t start_pc;
 	uint32_t sp;
+	uint32_t end_code;
+	uint32_t brk;
 	
 	Process()
 	{
@@ -33,7 +35,7 @@ public:
 			}
 	}
 	
-	byte loadByte(long address)
+	byte loadByte(uint32_t address)
 	{
 		byte hi = (byte)((address >> 24) & 0xff);
 		if (memory[hi] == 0)
@@ -44,7 +46,7 @@ public:
 		return memory[hi][hi2][(address & 0xffff)];
 	}
 
-	void storeByte(long address, byte value)
+	void storeByte(uint32_t address, byte value)
 	{
 		byte hi = (byte)((address >> 24) & 0xff);
 		if (memory[hi] == 0)
@@ -57,6 +59,23 @@ public:
 		if (memory[hi][hi2] == 0)
 			memory[hi][hi2] = (byte*)malloc(0x10000 * sizeof(byte));
 		memory[hi][hi2][(address & 0xffff)] = value;
+	}
+	
+	uint32_t loadDWord(uint32_t address)
+	{
+		uint32_t value = 0;
+		for (int i = 0; i < 4; i++)
+			value |= (uint32_t)loadByte(address + i) << (i * 8);
+		return value;
+	}
+	
+	void storeDWord(uint32_t address, uint32_t value)
+	{
+		for (int i = 0; i < 4; i++)
+		{
+			storeByte(address + i, value & 0xff);
+			value = value >> 8;
+		}
 	}
 
 	void push(uint32_t value)
@@ -252,6 +271,8 @@ bool loadELF(File *file, Process *process)
 			from_file++;
 			to_mem++;
 		}
+		process->end_code = to_mem;
+		process->brk = (to_mem + 0xfff) & 0xfffff000;
 	}
 	
 	return true;
@@ -275,9 +296,34 @@ public:
 					opcode = getPC();
 					switch (opcode)
 					{
+						case 0xC3:
+							_ebx += _eax;
+							printf(" add_ebx,eax %08x\n", _eax);
+							break;
+							
 						case 0xF8:
 							_eax += _edi;
 							printf(" add_eax,edi %08x\n", _eax);
+							break;
+							
+						default:
+							printf("Unknown opcode\n");
+							return;
+					}
+					break;
+				
+				case 0x0F:
+					opcode = getPC();
+					switch (opcode)
+					{
+						case 0x84:
+							{
+								uint32_t offset = getLongPC();
+								if (_flags == 0)
+								{
+									_pc += offset;
+								}
+							}
 							break;
 							
 						default:
@@ -296,6 +342,11 @@ public:
 					opcode = getPC();
 					switch(opcode)
 					{
+						case 0xC0:
+							_eax = 0L;
+							printf(" xor_eax,eax\n");
+							break;
+						
 						case 0xC9:
 							_ecx = 0L;
 							printf(" xor_ecx,ecx\n");
@@ -326,7 +377,22 @@ public:
 							return;
 					}
 					break;
-					
+				
+				case 0x39:
+					opcode = getPC();
+					switch(opcode)
+					{
+						case 0xCB:
+							_flags = _ebx - _ecx;
+							printf(" cmp_ebx,ecx\n");
+							break;
+
+						default:
+							printf("Unknown opcode\n");
+							return;
+					}
+					break;
+						
 				case 0x3C:
 					opcode = getPC();
 					_flags = (byte)_eax - opcode;
@@ -337,24 +403,19 @@ public:
 					_ebp--;
 					break;
 					
-				case 0x50:
-					_process->push(_eax);
-					printf(" push_eax\n");
-					break;
-					
-				case 0x52:
-					_process->push(_edx);
-					printf(" push_edx\n");
-					break;
-					
-				case 0x53:
-					_process->push(_ebx);
-					printf(" push_ebx\n");
-					break;
+				case 0x50: _process->push(_eax); printf(" push_eax\n"); break;
+				case 0x51: _process->push(_ecx); printf(" push_ecx\n"); break;
+				case 0x52: _process->push(_edx); printf(" push_edx\n"); break;
+				case 0x53: _process->push(_ebx); printf(" push_ebx\n"); break;
 					
 				case 0x58:
 					_eax = _process->pop();
 					printf(" pop_eax: %08x\n", _eax);
+					break;
+					
+				case 0x59:
+					_ecx = _process->pop();
+					printf(" pop_ecx: %08x\n", _ecx);
 					break;
 					
 				case 0x5A:
@@ -436,6 +497,38 @@ public:
 					}
 					break;
 				
+				case 0x7E:
+					opcode = getPC();
+					printf(" jle %02X\n", opcode);
+					if (_flags <= 0)
+					{
+						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
+						printf("  => jump to %08x\n", _pc);
+					}
+					break;
+				
+				case 0x83:
+					opcode = getPC();
+					switch (opcode)
+					{
+						case 0xC1:
+							opcode = getPC();
+							_ecx += opcode;
+							printf(" add_ecx %02x\n", opcode);
+							break;
+							
+						case 0xC3:
+							opcode = getPC();
+							_ebx += opcode;
+							printf(" add_ecx %02x\n", opcode);
+							break;
+							
+						default:
+							printf("Unknown opcode\n");
+							return;
+					}
+					break;
+				
 				case 0x85:
 					opcode = getPC();
 					switch (opcode)
@@ -445,9 +538,14 @@ public:
 							printf(" test_eax,eax %08x %d\n", _eax, _flags);
 							break;
 							
+						case 0xDB:
+							_flags = (int32_t)_ebx;
+							printf(" test_ebx,ebx %08x %d\n", _ebx, _flags);
+							break;
+							
 						case 0xED:
 							_flags = (int32_t)_ebp;
-							printf(" test_ebp,ebp\n");
+							printf(" test_ebp,ebp %08x %d\n", _ebp, _flags);
 							break;
 							
 						default:
@@ -455,17 +553,68 @@ public:
 							return;
 					}
 					break;
-						
+				
+				case 0x88:
+					opcode = getPC();
+					switch (opcode)
+					{
+						case 0x01:
+						{
+							_process->storeDWord(_ecx, (byte)_eax);
+							printf(" mov_[ecx:%08x],al %02x\n", _ecx, (byte)_eax);
+						}
+						break;
+					
+						default:
+							printf("Unknown opcode\n");
+							return;
+					}
+					break;
+
 				case 0x89:
 					opcode = getPC();
 					switch (opcode)
 					{
+						case 0x01:
+							_process->storeDWord(_ecx, _eax);
+							printf(" mov_[ecx:%08x],eax %08x\n", _ecx, _eax);
+						break;
+						
+						case 0x1D:
+						{
+							uint32_t addr = getLongPC();
+							_process->storeDWord(addr, _ebx);
+							printf(" mov_ebx: %08x to memory[%08x]\n", _ebx, addr);
+						}
+						break;
+						
+						case 0xC1: _ecx = _eax; printf(" mov_ecx,eax = %08x\n", _ecx); break;
 						case 0xC2: _edx = _eax; printf(" mov_edx,eax = %08x\n", _edx); break;
-						case 0xC6: _esi = _eax; printf(" mov_esi,eax = %08x\n", _esi);break;
-						case 0xC7: _edi = _eax; printf(" mov_edi,eax = %08x\n", _edi);break;
-						case 0xD3: _ebx = _edx; printf(" mov_edx,eax = %08x\n", _edx);break;
-						case 0xE1: _ecx = _process->sp; printf(" mov_ecx,esp = %08x\n", _ecx);break;
-						case 0xF3: _ebx = _esi; printf(" mov_ebx,esi = %08x\n", _ebx);break;
+						case 0xC3: _ebx = _eax; printf(" mov_ebx,eax = %08x\n", _ebx); break;
+						case 0xC6: _esi = _eax; printf(" mov_esi,eax = %08x\n", _esi); break;
+						case 0xC7: _edi = _eax; printf(" mov_edi,eax = %08x\n", _edi); break;
+						case 0xD3: _ebx = _edx; printf(" mov_edx,eax = %08x\n", _edx); break;
+						case 0xD8: _eax = _ebx; printf(" mov_eax,ebx = %08x\n", _eax); break;
+						case 0xD9: _ecx = _ebx; printf(" mov_ecx,ebx = %08x\n", _ecx); break;
+						case 0xDA: _edx = _ebx; printf(" mov_edx,ebx = %08x\n", _edx); break;
+						case 0xE1: _ecx = _process->sp; printf(" mov_ecx,esp = %08x\n", _ecx); break;
+						case 0xE5: _ebp = _process->sp; printf(" mov_ebp,esp = %08x\n", _ecx); break;
+						case 0xF3: _ebx = _esi; printf(" mov_ebx,esi = %08x\n", _ebx); break;
+							
+						default:
+							printf("Unknown opcode\n");
+							return;
+					}
+					break;
+			
+				case 0x8A:
+					opcode = getPC();
+					switch (opcode)
+					{
+						case 0x03:
+							set_al(_process->loadByte(_ebx));
+							printf(" mov_al,[ebx:%08x] %08x\n", _ebx, _eax);
+							break; 
 							
 						default:
 							printf("Unknown opcode\n");
@@ -473,6 +622,82 @@ public:
 					}
 					break;
 				
+				case 0x8B:
+					opcode = getPC();
+					switch (opcode)
+					{
+						case 0x03:
+							_eax = _process->loadDWord(_ebx);
+							printf(" mov_eax,[ebx:%08x] %08x\n", _ebx, _eax);
+							break; 
+						
+						case 0x1D:
+						{
+							uint32_t addr = getLongPC();
+							_ebx = _process->loadDWord(addr);
+							printf(" mov_ebx: %08x from memory[%08x]\n", _ebx, addr);
+						}
+						break;
+							
+						default:
+							printf("Unknown opcode\n");
+							return;
+					}
+					break;
+				
+				case 0x8D:
+					opcode = getPC();
+					switch (opcode)
+					{
+						case 0x0C:
+							opcode = getPC();
+							switch (opcode)
+							{
+								case 0x24:
+									_ecx = _process->sp;
+									printf(" lea_ecx,[esp] %08x\n", _ecx);
+									break;
+									
+								default:
+									printf("Unknown opcode\n");
+									return;
+							}
+							break;
+
+						default:
+							printf("Unknown opcode\n");
+							return;
+					}
+					break;
+					
+				case 0xA1:
+					{
+						uint32_t addr = getLongPC();
+						_eax = _process->loadDWord(addr);
+						printf(" mov_eax: %08x from memory[%08x]\n", _eax, addr);
+					}
+					break;
+						
+				case 0xA3:
+					{
+						uint32_t addr = getLongPC();
+						_process->storeDWord(addr, _eax);
+						printf(" mov_eax: %08x to memory[%08x]\n", _eax, addr);
+					}
+					break;
+				
+				case 0xB8:
+					{
+						_eax = getLongPC();
+						printf(" mov_eax, %08x\n", _eax);
+					}
+					break;
+				
+				case 0xBB:
+					_ebx = getLongPC();
+					printf("mov_ebx, %08x\n", _ebx);
+					break;
+
 				case 0xC1:
 					opcode = getPC();
 					switch (opcode)
@@ -516,6 +741,10 @@ public:
 								
 								case 0x05:
 									int_open_file();
+									break;
+									
+								case 0x2D:
+									int_sys_brk();
 									break;
 									
 								default:
@@ -583,8 +812,8 @@ public:
 			int r = read(_ebx, &buffer, 1);
 			if (r == -1)
 			{
-				_eax = errno;
-				printf(" read errno %d\n", _eax);
+				_eax = -4; // EOF
+				printf(" read errno\n");
 				return;
 			}
 			if (r == 0)
@@ -595,6 +824,8 @@ public:
 				printf(": %c", buffer);
 			printf(" to %08x\n", _ecx + i);
 		}
+		if (i == 0)
+			_eax = -4; // EOF
 		printf(" read %d bytes\n", i);
 		_eax = i;
 	}		
@@ -619,6 +850,26 @@ public:
 		}
 		printf(" wrote %d bytes\n", i);
 		_eax = i;
+	}
+	
+	void int_sys_brk()
+	{
+		printf(" sys_brk %08x:", _ebx);
+		if (_ebx < _process->end_code)
+		{
+			_eax = _process->brk;
+			printf(" init on");
+		}
+		else
+		{
+			_eax = (_ebx + 0xfff) & 0xfffff000;
+			if (_eax > _process->brk)
+			{
+				printf(" extend to");
+				_process->brk = _eax;
+			}
+		}
+		printf(" %08x\n", _eax);
 	}		
 
 private:
@@ -681,8 +932,10 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 	
+	// Set the environment
+	main_process.push(0);
 	// File process with arguments
-	long p = 0;
+	uint32_t p = 4;
 	for (int i = argc - 1; i > 0; i--)
 	{
 		main_process.push(p);
