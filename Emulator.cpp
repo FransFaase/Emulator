@@ -5,24 +5,58 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <cstdint>
+#include <string.h>
+
+const char *copystr(const char *v)
+{
+	char *result = (char*)malloc(strlen(v) + 1);
+	strcpy(result, v);
+	return result;
+}
 
 typedef unsigned char byte;
 
 class Process
 {
 public:
+	const char *name;
+	
 	byte **memory[256];
 	
-	uint32_t start_pc;
+	uint32_t pc;
 	uint32_t sp;
 	uint32_t end_code;
 	uint32_t brk;
+	Process *parent;
 	
-	Process()
+	Process(Process *_parent = 0) : parent(_parent)
 	{
+		name = "";
+		
 		for (int i = 0; i < 256; i++)
 			memory[i] = 0;
 		sp = 0xFFFFFFFFL;
+		if (parent != 0)
+		{
+			pc = parent->pc;
+			sp = parent->sp;
+			end_code = parent->end_code;
+			brk = parent->brk;
+			for (int i = 0; i < 256; i++)
+				if (parent->memory[i] != 0)
+				{
+					memory[i] = (byte**)malloc(0x100 * sizeof(byte *));
+					for (int j = 0; j < 256; j++)
+						if (parent->memory[i][j] == 0)
+							memory[i][j] = 0;
+						else
+						{
+							memory[i][j] = (byte*)malloc(0x10000 * sizeof(byte));
+							for (int k = 0; k < 0x10000; k++)
+								memory[i][j][k] = parent->memory[i][j][k];
+						}
+				}
+		}
 	}
 	~Process()
 	{
@@ -34,6 +68,41 @@ public:
 				free(memory[i]);
 			}
 	}
+
+	void init(int argc, char *argv[], char *env[])
+	{
+		uint32_t p = 4;
+		
+		int nr_env = 0;
+		while (env[nr_env] != 0)
+			nr_env++;
+		
+		push(0);	
+		for (int i = nr_env - 1; i >= 0; i--)
+		{
+			push(p);
+			for (int j = 0; ; j++)
+			{
+				storeByte(p++, env[i][j]);
+				if (env[i][j] == 0)
+					break;
+			}
+		}
+		
+		push(0);
+		for (int i = argc - 1; i >= 0; i--)
+		{
+			push(p);
+			for (int j = 0; ; j++)
+			{
+				storeByte(p++, argv[i][j]);
+				if (argv[i][j] == 0)
+					break;
+			}
+		}
+		push(argc);
+	}
+
 	
 	byte loadByte(uint32_t address)
 	{
@@ -108,16 +177,29 @@ public:
 };
 
 
+char *root_dir = 0;
+char *name_in_root(const char *name)
+{
+	static char fullname[500];
+	strcpy(fullname, root_dir);
+	if (name[0] == '.' && name[1] == '/')
+		name += 2;
+	strcat(fullname, name);
+	return fullname;
+}	
+
 class File
 {
 public:
+	const char *fullname;
 	byte *data = 0;
 	uint32_t length;
 	
 	File() : data(0), length(0) {}
 	bool open(const char *name)
 	{
-		FILE *f = fopen(name, "r");
+		fullname = copystr(name_in_root(name));
+		FILE *f = fopen(fullname, "r");
 		if (f == 0)
 		{
 			return false;
@@ -158,6 +240,8 @@ public:
 
 bool loadELF(File *file, Process *process)
 {
+	process->name = file->fullname;
+	
 	byte signature[24] = { 
 		0x7F, 0x45, 0x4C, 0x46,
 		0x01,
@@ -178,7 +262,7 @@ bool loadELF(File *file, Process *process)
 			return false;
 		}
 	uint32_t pc = file->readLong(i);
-	process->start_pc = pc;
+	process->pc = pc;
 	uint32_t phoff = file->readLong(i);
 	if (phoff != 0x34)
 	{
@@ -265,9 +349,9 @@ bool loadELF(File *file, Process *process)
 		uint32_t to_mem = ph_vaddr + from_file;
 		for (uint32_t j = 0; j < ph_filesz; j++)
 		{
-			printf("Load byte from %08x: %02x ", from_file, file->data[from_file]);
+			//printf("Load byte from %08x: %02x ", from_file, file->data[from_file]);
 			process->storeByte(to_mem, file->data[from_file]);
-			printf("Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
+			//printf("Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
 			from_file++;
 			to_mem++;
 		}
@@ -278,6 +362,7 @@ bool loadELF(File *file, Process *process)
 	return true;
 }
 
+
 class Processor
 {
 public:
@@ -285,7 +370,7 @@ public:
 	
 	void run()
 	{
-		_pc = _process->start_pc;
+		_pc = _process->pc;
 		for (;;)
 		{
 			byte opcode = getPC();
@@ -307,7 +392,7 @@ public:
 							break;
 							
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -327,7 +412,7 @@ public:
 							break;
 							
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -373,7 +458,7 @@ public:
 							break;
 
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -388,7 +473,7 @@ public:
 							break;
 
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -452,7 +537,7 @@ public:
 							break;
 							
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -524,7 +609,7 @@ public:
 							break;
 							
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -549,7 +634,7 @@ public:
 							break;
 							
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -566,7 +651,7 @@ public:
 						break;
 					
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -599,10 +684,11 @@ public:
 						case 0xDA: _edx = _ebx; printf(" mov_edx,ebx = %08x\n", _edx); break;
 						case 0xE1: _ecx = _process->sp; printf(" mov_ecx,esp = %08x\n", _ecx); break;
 						case 0xE5: _ebp = _process->sp; printf(" mov_ebp,esp = %08x\n", _ecx); break;
+						case 0xEA: _edx = _ebp; printf(" mov_edx,ebp = %08x\n", _edx); break;
 						case 0xF3: _ebx = _esi; printf(" mov_ebx,esi = %08x\n", _ebx); break;
 							
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -617,7 +703,7 @@ public:
 							break; 
 							
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -631,6 +717,11 @@ public:
 							printf(" mov_eax,[ebx:%08x] %08x\n", _ebx, _eax);
 							break; 
 						
+						case 0x1B:
+							_ebx = _process->loadDWord(_ebx);
+							printf(" mov_ebs,[ebx] %08x\n", _ebx);
+						break;
+					
 						case 0x1D:
 						{
 							uint32_t addr = getLongPC();
@@ -640,7 +731,7 @@ public:
 						break;
 							
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -659,13 +750,13 @@ public:
 									break;
 									
 								default:
-									printf("Unknown opcode\n");
+									unknownOpcode();
 									return;
 							}
 							break;
 
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -687,10 +778,13 @@ public:
 					break;
 				
 				case 0xB8:
-					{
-						_eax = getLongPC();
-						printf(" mov_eax, %08x\n", _eax);
-					}
+					_eax = getLongPC();
+					printf(" mov_eax, %08x\n", _eax);
+					break;
+				
+				case 0xB9:
+					_ecx = getLongPC();
+					printf(" mov_ecx, %08x\n", _ecx);
 					break;
 				
 				case 0xBB:
@@ -709,7 +803,7 @@ public:
 							break;
 							
 						default:
-							printf("Unknown opcode\n");
+							unknownOpcode();
 							return;
 					}
 					break;
@@ -729,8 +823,22 @@ public:
 							{
 								case 0x01:
 									// Exit
-									return;
-									
+									if (_process->parent != 0)
+									{
+										Process *parent = _process->parent;
+										delete _process;
+										_process = parent;
+										_pc = _process->pc;
+										_eax = 1;
+									}
+									else
+										return;
+									break;
+
+								case 0x02:
+									int_fork();
+									break;
+																		
 								case 0x03:
 									int_read();
 									break;
@@ -742,7 +850,16 @@ public:
 								case 0x05:
 									int_open_file();
 									break;
-									
+								
+								case 0x07:
+									int_wait_pid();
+									break;
+								
+								case 0x0B:
+									if (!int_execve())
+										return;
+									break;
+										
 								case 0x2D:
 									int_sys_brk();
 									break;
@@ -776,7 +893,7 @@ public:
 					break;
 
 				default:
-					printf("Unknown opcode\n");
+					unknownOpcode();
 					return;
 			}
 		}
@@ -793,14 +910,27 @@ public:
 			if (ch == '\0')
 				break;
 		}
-		printf(" Open File %s %d %d =>", filename, _ecx, _edx);
-		int fh = open(filename, _ecx, _edx);
+		const char *fullname = name_in_root(filename);
+		printf(" Open File %s %d %d =>", fullname, _ecx, _edx);
+		int fh = open(fullname, _ecx, _edx);
 		printf(" %d\n", fh);
 		if (fh <= 0)
 		{
 			exit(0);
 		}
 		_eax = fh;
+	}
+	
+	void int_wait_pid()
+	{
+		_eax = 0;
+	}
+	
+	void int_fork()
+	{
+		_process->pc = _pc;
+		_process = new Process(_process);
+		_eax = 0;
 	}
 	
 	void int_read()
@@ -852,6 +982,92 @@ public:
 		_eax = i;
 	}
 	
+	bool int_execve()
+	{
+		char prog_name[500];
+		for (int i = 0; i < 200; i++)
+		{
+			prog_name[i] = _process->loadByte(_ebx + i);
+			if (prog_name[i] == 0)
+				break;
+		}
+
+		printf(" execve\n  |%s|\n", prog_name);
+		
+#define MAX_NR_ARGC 500
+#define MAX_ARG_LEN 500
+		
+		int argc = 0;
+		char *argv[MAX_NR_ARGC];
+		for (; argc < MAX_NR_ARGC; argc++)
+		{
+			uint32_t addr = _process->loadDWord(_ecx + 4 * argc);
+			if (addr == 0)
+				break;
+			
+			char arg[MAX_ARG_LEN];
+			int i = 0;
+			for (; i < MAX_ARG_LEN; i++)
+			{
+				arg[i] = _process->loadByte(addr + i);
+				if (arg[i] == 0)
+					break;
+			}
+			printf(" %d |%s|\n", argc, arg);
+			argv[argc] = (char*)malloc(i);
+			strcpy(argv[argc], arg);
+		}
+		
+#define MAX_NR_ENV 500
+#define MAX_ENV_LEN 500
+		
+		int envc = 0;
+		char *env[MAX_NR_ENV];
+		for (; envc < MAX_NR_ENV; envc++)
+		{
+			uint32_t addr = _process->loadDWord(_edx + 4 * envc);
+			if (addr == 0)
+				break;
+			
+			char arg[MAX_ENV_LEN];
+			int i = 0;
+			for (; i < MAX_ENV_LEN; i++)
+			{
+				arg[i] = _process->loadByte(addr + i);
+				if (arg[i] == 0)
+					break;
+			}
+			printf(" env %d |%s|\n", envc, arg);
+			env[envc] = (char*)malloc(i);
+			strcpy(env[envc], arg);
+		}
+		
+		
+		File program;
+		if (!program.open(prog_name))
+		{
+			fprintf(stderr, "Could not read '%s'\n", prog_name);
+			return false;
+		}
+		
+		if (!loadELF(&program, _process))
+		{
+			fprintf(stderr, "Failed to load '%s' as ELF\n", prog_name);
+			return false;
+		}
+		
+		_process->init(argc, argv, env);
+		_pc = _process->pc;
+		
+		for (int i = 0; i < argc; i++)
+			delete(argv[i]);
+
+		for (int i = 0; i < envc; i++)
+			delete(env[i]);
+
+		return true;
+	}
+	
 	void int_sys_brk()
 	{
 		printf(" sys_brk %08x:", _ebx);
@@ -870,7 +1086,12 @@ public:
 			}
 		}
 		printf(" %08x\n", _eax);
-	}		
+	}
+	
+	void unknownOpcode()
+	{
+		printf("Unknown opcode in %s\n", _process->name);
+	}
 
 private:
 	byte getPC()
@@ -911,44 +1132,33 @@ private:
 
 int main(int argc, char *argv[])
 {
-	if (argc == 1)
+	if (argc < 3)
 	{
 		fprintf(stderr, "No argument\n");
 		return 0;
 	}
-	
+
+	root_dir = argv[1];
+		
 	File program;
-	if (!program.open(argv[1]))
+	if (!program.open(argv[2]))
 	{
-		fprintf(stderr, "Could not read '%s'\n", argv[1]);
+		fprintf(stderr, "Could not read '%s'\n", argv[2]);
 		return 0;
 	}
 	
-	Process main_process;
+	Process *main_process = new Process;
 	
-	if (!loadELF(&program, &main_process))
+	if (!loadELF(&program, main_process))
 	{
-		fprintf(stderr, "Failed to load '%s' as ELF\n", argv[1]);
+		fprintf(stderr, "Failed to load '%s' as ELF\n", argv[2]);
 		return 0;
 	}
 	
-	// Set the environment
-	main_process.push(0);
-	// File process with arguments
-	uint32_t p = 4;
-	for (int i = argc - 1; i > 0; i--)
-	{
-		main_process.push(p);
-		for (int j = 0; ; j++)
-		{
-			main_process.storeByte(p++, argv[i][j]);
-			if (argv[i][j] == 0)
-				break;
-		}
-	}
-	main_process.push(argc - 1);
+	char *env[1] = { 0 };
+	main_process->init(argc - 2, argv + 2, env);
 	
-	Processor processor(&main_process);
+	Processor processor(main_process);
 	processor.run();
 	
 	return 0;	
