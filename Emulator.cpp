@@ -44,8 +44,58 @@ void print_trace(FILE *f)
 	printf("---\n");
 }
 
+
+int indent_depth = 0;
+void indent(FILE *fout) { fprintf(fout, "%*.*s", indent_depth, indent_depth, ""); }
+
+
+
 typedef unsigned char byte;
 
+class Process;
+class Usage;
+
+class File
+{
+public:
+	char *name;
+	char *path;
+
+	int nr;
+	
+	bool is_source;
+	bool produced;
+	Process *produced_by;
+	bool exec;
+	bool used_as_input;
+	bool removed;
+	
+	int fh; // -1 => closed
+
+	Usage *usages;
+
+	File *next;
+	
+	File(const char *fn, int _nr) : path(0), nr(_nr), is_source(false), produced(false), produced_by(0), exec(false), used_as_input(0), removed(0), fh(-1), usages(0), next(0)
+	{
+		name = copystr(fn);
+	}
+};
+
+File *files = 0;
+
+File *getFile(const char *name)
+{
+	static int nr = 1;
+	File **ref_file = &files;
+	for (; *ref_file != 0; ref_file = &(*ref_file)->next)
+		if (strcmp((*ref_file)->name, name) == 0)
+			return *ref_file;
+	File *file = new File(name, nr++);
+	*ref_file = file;
+	ref_file = &(*ref_file)->next;
+	return file;
+}
 
 
 class Process
@@ -64,9 +114,11 @@ public:
 	uint32_t brk;
 	Process *parent;
 	
+	Usage *uses;
+	
 	Process *next;
 	
-	Process(Process *_parent = 0) : parent(_parent), next(0)
+	Process(Process *_parent = 0) : parent(_parent), uses(0), next(0)
 	{
 		name = "";
 		
@@ -108,6 +160,7 @@ public:
 
 	void init(int argc, char *argv[], char *env[])
 	{
+		name = argv[0];
 		this->argc = argc;
 		this->argv = argv;
 		this->env = env;
@@ -143,7 +196,8 @@ public:
 		}
 		push(argc);
 	}
-
+	
+	void finish();
 	
 	byte loadByte(uint32_t address)
 	{
@@ -228,6 +282,81 @@ Process *newProcess(Process *parent)
 	return process;
 }
 
+class Usage
+{
+public:
+	bool as_input;
+	bool as_output;
+	bool as_exec;
+	bool as_removed;
+	
+	File *file;
+	Process *process;
+	
+	Usage *next_use;
+	Usage *next_usage;
+	
+	Usage (File *_file, Process *_process) : as_input(false), as_output(false), as_exec(false), as_removed(false), file(_file), process(_process), next_use(0), next_usage(0)
+	{
+		Usage **ref_use = &process->uses;
+		while (*ref_use != 0) ref_use = &(*ref_use)->next_use;
+		*ref_use = this;
+		Usage **ref_usage = &file->usages;
+		while (*ref_usage != 0) ref_usage = &(*ref_usage)->next_usage;
+		*ref_usage = this;
+	}
+	
+	void is_input(FILE *fout)
+	{
+		as_input = true;
+		file->used_as_input = true;
+		if (fout != 0) { indent(fout); fprintf(fout, "%s file: %s\n", /*file->exists ? "Existing" :*/ file->produced ? "Produced" : "Input", file->name); }
+	}
+	void is_output(FILE *fout)
+	{
+		as_output = true;
+		if (fout != 0) { indent(fout); fprintf(fout, "Output file: %s\n", file->name); }
+		file->produced = true;
+		file->produced_by = process;
+		file->removed = false;
+	}
+	void is_exec(FILE *fout)
+	{
+		as_exec = true;
+		if (fout != 0)
+		{
+			indent(fout); fprintf(fout, "Exec file: %s", file->name);
+			//if (!file->exists && !file->produced)
+			//	fprintf(fout, " Not existing nor produced");
+			//if (file->exists)
+			//	fprintf(fout, " Existing");
+			if (file->produced)
+				fprintf(fout, " Produced");
+			fprintf(fout, "\n");
+		}
+	}
+	void is_removed(FILE *fout)
+	{
+		as_removed = true;
+		file->removed = true;
+		indent(fout); fprintf(fout, "Deleted file: %s\n", file->name);
+	}
+};
+
+void Process::finish()
+{
+	printf("Close process\n");
+	for (Usage *use = uses; use != 0; use = use->next_use)
+		if (use->file->fh >= 0)
+		{
+			printf(" Close file %s\n", use->file->path);
+			close(use->file->fh);
+			use->file->fh = -1;
+		}
+}
+
+
+
 char *root_dir = 0;
 char *name_in_root(const char *name)
 {
@@ -249,8 +378,7 @@ public:
 	ProgramFile() : data(0), length(0) {}
 	bool open(const char *name)
 	{
-		fullname = copystr(name_in_root(name));
-		FILE *f = fopen(fullname, "r");
+		FILE *f = fopen(name, "r");
 		if (f == 0)
 		{
 			return false;
@@ -879,9 +1007,8 @@ public:
 									// Exit
 									if (_process->parent != 0)
 									{
-										Process *parent = _process->parent;
-										delete _process;
-										_process = parent;
+										_process->finish();
+										_process = _process->parent;
 										_pc = _process->pc;
 										_eax = 1;
 									}
@@ -964,14 +1091,24 @@ public:
 			if (ch == '\0')
 				break;
 		}
-		const char *fullname = name_in_root(filename);
-		printf(" Open ProgramFile %s %d %d =>", fullname, _ecx, _edx);
-		int fh = open(fullname, _ecx, _edx);
+		File *file = getFile(filename);
+		bool read_only = (_ecx & O_ACCMODE) == O_RDONLY;
+		Usage *usage = new Usage(file, _process);
+		if (read_only)
+			usage->is_input(0);
+		else
+			usage->is_output(0);
+			
+		if (file->path == 0)
+			file->path = copystr(read_only ? name_in_root(filename) : file->name);
+		printf(" Open ProgramFile %s %d %d =>", file->path, _ecx, _edx);
+		int fh = open(file->path, _ecx, _edx);
 		printf(" %d\n", fh);
 		if (fh <= 0)
 		{
 			exit(0);
 		}
+		file->fh = fh;
 		_eax = fh;
 	}
 	
@@ -1096,17 +1233,22 @@ public:
 			env[j] = copystr(arg);
 		}
 		
+		File *file = getFile(prog_name);
+		Usage *usage = new Usage(file, _process);
+		usage->is_exec(0);
+		if (file->path == 0)
+			file->path = copystr(name_in_root(prog_name));
 		
 		ProgramFile program;
-		if (!program.open(prog_name))
+		if (!program.open(file->path))
 		{
-			fprintf(stderr, "Could not read '%s'\n", prog_name);
+			fprintf(stderr, "Could not read '%s'\n", file->path);
 			return false;
 		}
 		
 		if (!loadELF(&program, _process))
 		{
-			fprintf(stderr, "Failed to load '%s' as ELF\n", prog_name);
+			fprintf(stderr, "Failed to load '%s' as ELF\n", file->path);
 			return false;
 		}
 		
@@ -1189,14 +1331,20 @@ int main(int argc, char *argv[])
 
 	root_dir = argv[1];
 		
+	Process *main_process = newProcess(0);
+	
+	File *file = getFile(argv[2]);
+	Usage *usage = new Usage(file, main_process);
+	usage->is_exec(0);
+	if (file->path == 0)
+		file->path = copystr(name_in_root(argv[2]));
+
 	ProgramFile program;
-	if (!program.open(argv[2]))
+	if (!program.open(file->path))
 	{
 		fprintf(stderr, "Could not read '%s'\n", argv[2]);
 		return 0;
 	}
-	
-	Process *main_process = new Process;
 	
 	if (!loadELF(&program, main_process))
 	{
