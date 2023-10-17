@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <cstdint>
 #include <string.h>
+#include <stdarg.h>
 
 const char *copystr(const char *v)
 {
@@ -14,8 +15,38 @@ const char *copystr(const char *v)
 	return result;
 }
 
+#define MAX_NR_MESSAGES 20
+#define MAX_MESSAGE_LEN 200
+char messages[MAX_NR_MESSAGES][MAX_MESSAGE_LEN];
+int message_nr = 0;
+
+void trace(const char* format, ...)
+{
+	va_list argp;
+	va_start(argp, format);
+#if 0
+	vfprintf(stdout, format, argp);
+#else
+	vsnprintf(messages[message_nr], MAX_MESSAGE_LEN, format, argp);
+	messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
+	message_nr = (message_nr + 1) % MAX_NR_MESSAGES;
+#endif
+	va_end(argp);
+}
+
+void print_trace(FILE *f)
+{
+	printf("---\n");
+	for (int i = message_nr; i < MAX_NR_MESSAGES; i++)
+		printf("%s", messages[i]);
+	for (int i = 0; i < message_nr; i++)
+		printf("%s", messages[i]);
+	printf("---\n");
+}
+
 typedef unsigned char byte;
 
+	
 class Process
 {
 public:
@@ -150,7 +181,7 @@ public:
 	void push(uint32_t value)
 	{
 		sp -= 4;
-		printf("push %08x to %08x\n", value, sp);
+		trace("push %08x to %08x\n", value, sp);
 		storeByte(sp    , (byte)value);
 		storeByte(sp + 1, (byte)(value >> 8));
 		storeByte(sp + 2, (byte)(value >> 16));
@@ -169,7 +200,7 @@ public:
 		value |= ((uint32_t)loadByte(sp + 1)) << 8;
 		value |= ((uint32_t)loadByte(sp + 2)) << 16;
 		value |= ((uint32_t)loadByte(sp + 3)) << 24;
-		printf("pop %08x from %08x\n", value, sp);
+		trace("pop %08x from %08x\n", value, sp);
 		sp += 4;
 		
 		return value;
@@ -186,16 +217,16 @@ char *name_in_root(const char *name)
 		name += 2;
 	strcat(fullname, name);
 	return fullname;
-}	
+}
 
-class File
+class ProgramFile
 {
 public:
 	const char *fullname;
 	byte *data = 0;
 	uint32_t length;
 	
-	File() : data(0), length(0) {}
+	ProgramFile() : data(0), length(0) {}
 	bool open(const char *name)
 	{
 		fullname = copystr(name_in_root(name));
@@ -211,8 +242,8 @@ public:
 		length = read(fh, data, length);
 		printf("Length %08x\n", length);
 		for (int i = 0; i < length; i++)
-			printf("%02X ", data[i]);
-		printf("\n");
+			trace("%02X ", data[i]);
+		trace("\n");
 		fclose(f);
 		return true;
 	}
@@ -227,18 +258,17 @@ public:
 	
 	uint32_t readLong(uint32_t &i)
 	{
-		printf("readLong %08x ", i);
 		uint32_t result = 0;
 		result |= (uint32_t)data[i++];
 		result |= (uint32_t)data[i++] << 8;
 		result |= (uint32_t)data[i++] << 16;
 		result |= (uint32_t)data[i++] << 24;
-		printf("%08x\n", result);
+		trace("readLong %08x %08x\n", i - 4, result);
 		return result;
 	}
 };
 
-bool loadELF(File *file, Process *process)
+bool loadELF(ProgramFile *file, Process *process)
 {
 	process->name = file->fullname;
 	
@@ -362,7 +392,6 @@ bool loadELF(File *file, Process *process)
 	return true;
 }
 
-
 class Processor
 {
 public:
@@ -383,12 +412,12 @@ public:
 					{
 						case 0xC3:
 							_ebx += _eax;
-							printf(" add_ebx,eax %08x\n", _eax);
+							trace(" add_ebx,eax %08x\n", _eax);
 							break;
 							
 						case 0xF8:
 							_eax += _edi;
-							printf(" add_eax,edi %08x\n", _eax);
+							trace(" add_eax,edi %08x\n", _eax);
 							break;
 							
 						default:
@@ -419,7 +448,7 @@ public:
 				
 				case 0x2C:
 					opcode = getPC();
-					printf(" sub_al, %d\n", opcode);
+					trace(" sub_al, %d\n", opcode);
 					set_al((byte)(_eax & 0xFF) - opcode);
 					break;
 					 
@@ -429,32 +458,32 @@ public:
 					{
 						case 0xC0:
 							_eax = 0L;
-							printf(" xor_eax,eax\n");
+							trace(" xor_eax,eax\n");
 							break;
 						
 						case 0xC9:
 							_ecx = 0L;
-							printf(" xor_ecx,ecx\n");
+							trace(" xor_ecx,ecx\n");
 							break;
 						
 						case 0xD2:
 							_edx = 0L;
-							printf(" xor_edx,edx\n");
+							trace(" xor_edx,edx\n");
 							break;
 
 						case 0xDB:
 							_ebx = 0L;
-							printf(" xor_ebx,ebx\n");
+							trace(" xor_ebx,ebx\n");
 							break;
 
 						case 0xED:
 							_ebp = 0L;
-							printf(" xor_ebp,ebp\n");
+							trace(" xor_ebp,ebp\n");
 							break;
 
 						case 0xFF:
 							_edi = 0L;
-							printf(" xor_edi,edi\n");
+							trace(" xor_edi,edi\n");
 							break;
 
 						default:
@@ -469,7 +498,7 @@ public:
 					{
 						case 0xCB:
 							_flags = _ebx - _ecx;
-							printf(" cmp_ebx,ecx\n");
+							trace(" cmp_ebx,ecx\n");
 							break;
 
 						default:
@@ -481,47 +510,47 @@ public:
 				case 0x3C:
 					opcode = getPC();
 					_flags = (byte)_eax - opcode;
-					printf(" cmp_al, %d = %08x\n", opcode, _flags);
+					trace(" cmp_al, %d = %08x\n", opcode, _flags);
 					break;
 					
 				case 0x4D:
 					_ebp--;
 					break;
 					
-				case 0x50: _process->push(_eax); printf(" push_eax\n"); break;
-				case 0x51: _process->push(_ecx); printf(" push_ecx\n"); break;
-				case 0x52: _process->push(_edx); printf(" push_edx\n"); break;
-				case 0x53: _process->push(_ebx); printf(" push_ebx\n"); break;
+				case 0x50: _process->push(_eax); trace(" push_eax\n"); break;
+				case 0x51: _process->push(_ecx); trace(" push_ecx\n"); break;
+				case 0x52: _process->push(_edx); trace(" push_edx\n"); break;
+				case 0x53: _process->push(_ebx); trace(" push_ebx\n"); break;
 					
 				case 0x58:
 					_eax = _process->pop();
-					printf(" pop_eax: %08x\n", _eax);
+					trace(" pop_eax: %08x\n", _eax);
 					break;
 					
 				case 0x59:
 					_ecx = _process->pop();
-					printf(" pop_ecx: %08x\n", _ecx);
+					trace(" pop_ecx: %08x\n", _ecx);
 					break;
 					
 				case 0x5A:
 					_edx = _process->pop();
-					printf(" pop_edx: %08x\n", _ebx);
+					trace(" pop_edx: %08x\n", _ebx);
 					break;
 					
 				case 0x5B:
 					_ebx = _process->pop();
-					printf(" pop_ebx: %08x\n", _ebx);
+					trace(" pop_ebx: %08x\n", _ebx);
 					break;
 					
 				case 0x5D:
 					_ebp = _process->pop();
-					printf(" pop_eax: %08x\n", _eax);
+					trace(" pop_eax: %08x\n", _eax);
 					break;
 					
 				case 0x6A:
 					opcode = getPC();
 					_process->push((uint32_t)(char)opcode);
-					printf(" push %02x\n", opcode);
+					trace(" push %02x\n", opcode);
 					break;
 				
 				case 0x66:
@@ -544,51 +573,51 @@ public:
 				
 				case 0x74:
 					opcode = getPC();
-					printf(" je %02X\n", opcode);
+					trace(" je %02X\n", opcode);
 					if (_flags == 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						printf("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n", _pc);
 					}
 					break;
 				
 				case 0x75:
 					opcode = getPC();
-					printf(" jne %02X\n", opcode);
+					trace(" jne %02X\n", opcode);
 					if (_flags != 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						printf("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n", _pc);
 					}
 					break;
 				
 				case 0x7C:
 					opcode = getPC();
-					printf(" jl %02X  flags = %d\n", opcode, _flags);
+					trace(" jl %02X  flags = %d\n", opcode, _flags);
 					if (_flags < 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						printf("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n", _pc);
 					}
 					break;
 				
 				case 0x7D:
 					opcode = getPC();
-					printf(" jge %02X\n", opcode);
+					trace(" jge %02X\n", opcode);
 					if (_flags >= 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						printf("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n", _pc);
 					}
 					break;
 				
 				case 0x7E:
 					opcode = getPC();
-					printf(" jle %02X\n", opcode);
+					trace(" jle %02X\n", opcode);
 					if (_flags <= 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						printf("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n", _pc);
 					}
 					break;
 				
@@ -599,13 +628,13 @@ public:
 						case 0xC1:
 							opcode = getPC();
 							_ecx += opcode;
-							printf(" add_ecx %02x\n", opcode);
+							trace(" add_ecx %02x\n", opcode);
 							break;
 							
 						case 0xC3:
 							opcode = getPC();
 							_ebx += opcode;
-							printf(" add_ecx %02x\n", opcode);
+							trace(" add_ecx %02x\n", opcode);
 							break;
 							
 						default:
@@ -620,17 +649,17 @@ public:
 					{
 						case 0xC0:
 							_flags = (int32_t)_eax;
-							printf(" test_eax,eax %08x %d\n", _eax, _flags);
+							trace(" test_eax,eax %08x %d\n", _eax, _flags);
 							break;
 							
 						case 0xDB:
 							_flags = (int32_t)_ebx;
-							printf(" test_ebx,ebx %08x %d\n", _ebx, _flags);
+							trace(" test_ebx,ebx %08x %d\n", _ebx, _flags);
 							break;
 							
 						case 0xED:
 							_flags = (int32_t)_ebp;
-							printf(" test_ebp,ebp %08x %d\n", _ebp, _flags);
+							trace(" test_ebp,ebp %08x %d\n", _ebp, _flags);
 							break;
 							
 						default:
@@ -646,7 +675,7 @@ public:
 						case 0x01:
 						{
 							_process->storeDWord(_ecx, (byte)_eax);
-							printf(" mov_[ecx:%08x],al %02x\n", _ecx, (byte)_eax);
+							trace(" mov_[ecx:%08x],al %02x\n", _ecx, (byte)_eax);
 						}
 						break;
 					
@@ -662,30 +691,30 @@ public:
 					{
 						case 0x01:
 							_process->storeDWord(_ecx, _eax);
-							printf(" mov_[ecx:%08x],eax %08x\n", _ecx, _eax);
+							trace(" mov_[ecx:%08x],eax %08x\n", _ecx, _eax);
 						break;
 						
 						case 0x1D:
 						{
 							uint32_t addr = getLongPC();
 							_process->storeDWord(addr, _ebx);
-							printf(" mov_ebx: %08x to memory[%08x]\n", _ebx, addr);
+							trace(" mov_ebx: %08x to memory[%08x]\n", _ebx, addr);
 						}
 						break;
 						
-						case 0xC1: _ecx = _eax; printf(" mov_ecx,eax = %08x\n", _ecx); break;
-						case 0xC2: _edx = _eax; printf(" mov_edx,eax = %08x\n", _edx); break;
-						case 0xC3: _ebx = _eax; printf(" mov_ebx,eax = %08x\n", _ebx); break;
-						case 0xC6: _esi = _eax; printf(" mov_esi,eax = %08x\n", _esi); break;
-						case 0xC7: _edi = _eax; printf(" mov_edi,eax = %08x\n", _edi); break;
-						case 0xD3: _ebx = _edx; printf(" mov_edx,eax = %08x\n", _edx); break;
-						case 0xD8: _eax = _ebx; printf(" mov_eax,ebx = %08x\n", _eax); break;
-						case 0xD9: _ecx = _ebx; printf(" mov_ecx,ebx = %08x\n", _ecx); break;
-						case 0xDA: _edx = _ebx; printf(" mov_edx,ebx = %08x\n", _edx); break;
-						case 0xE1: _ecx = _process->sp; printf(" mov_ecx,esp = %08x\n", _ecx); break;
-						case 0xE5: _ebp = _process->sp; printf(" mov_ebp,esp = %08x\n", _ecx); break;
-						case 0xEA: _edx = _ebp; printf(" mov_edx,ebp = %08x\n", _edx); break;
-						case 0xF3: _ebx = _esi; printf(" mov_ebx,esi = %08x\n", _ebx); break;
+						case 0xC1: _ecx = _eax; trace(" mov_ecx,eax = %08x\n", _ecx); break;
+						case 0xC2: _edx = _eax; trace(" mov_edx,eax = %08x\n", _edx); break;
+						case 0xC3: _ebx = _eax; trace(" mov_ebx,eax = %08x\n", _ebx); break;
+						case 0xC6: _esi = _eax; trace(" mov_esi,eax = %08x\n", _esi); break;
+						case 0xC7: _edi = _eax; trace(" mov_edi,eax = %08x\n", _edi); break;
+						case 0xD3: _ebx = _edx; trace(" mov_edx,eax = %08x\n", _edx); break;
+						case 0xD8: _eax = _ebx; trace(" mov_eax,ebx = %08x\n", _eax); break;
+						case 0xD9: _ecx = _ebx; trace(" mov_ecx,ebx = %08x\n", _ecx); break;
+						case 0xDA: _edx = _ebx; trace(" mov_edx,ebx = %08x\n", _edx); break;
+						case 0xE1: _ecx = _process->sp; trace(" mov_ecx,esp = %08x\n", _ecx); break;
+						case 0xE5: _ebp = _process->sp; trace(" mov_ebp,esp = %08x\n", _ecx); break;
+						case 0xEA: _edx = _ebp; trace(" mov_edx,ebp = %08x\n", _edx); break;
+						case 0xF3: _ebx = _esi; trace(" mov_ebx,esi = %08x\n", _ebx); break;
 							
 						default:
 							unknownOpcode();
@@ -699,7 +728,7 @@ public:
 					{
 						case 0x03:
 							set_al(_process->loadByte(_ebx));
-							printf(" mov_al,[ebx:%08x] %08x\n", _ebx, _eax);
+							trace(" mov_al,[ebx:%08x] %08x\n", _ebx, _eax);
 							break; 
 							
 						default:
@@ -714,19 +743,19 @@ public:
 					{
 						case 0x03:
 							_eax = _process->loadDWord(_ebx);
-							printf(" mov_eax,[ebx:%08x] %08x\n", _ebx, _eax);
+							trace(" mov_eax,[ebx:%08x] %08x\n", _ebx, _eax);
 							break; 
 						
 						case 0x1B:
 							_ebx = _process->loadDWord(_ebx);
-							printf(" mov_ebs,[ebx] %08x\n", _ebx);
+							trace(" mov_ebs,[ebx] %08x\n", _ebx);
 						break;
 					
 						case 0x1D:
 						{
 							uint32_t addr = getLongPC();
 							_ebx = _process->loadDWord(addr);
-							printf(" mov_ebx: %08x from memory[%08x]\n", _ebx, addr);
+							trace(" mov_ebx: %08x from memory[%08x]\n", _ebx, addr);
 						}
 						break;
 							
@@ -746,7 +775,7 @@ public:
 							{
 								case 0x24:
 									_ecx = _process->sp;
-									printf(" lea_ecx,[esp] %08x\n", _ecx);
+									trace(" lea_ecx,[esp] %08x\n", _ecx);
 									break;
 									
 								default:
@@ -765,7 +794,7 @@ public:
 					{
 						uint32_t addr = getLongPC();
 						_eax = _process->loadDWord(addr);
-						printf(" mov_eax: %08x from memory[%08x]\n", _eax, addr);
+						trace(" mov_eax: %08x from memory[%08x]\n", _eax, addr);
 					}
 					break;
 						
@@ -773,23 +802,28 @@ public:
 					{
 						uint32_t addr = getLongPC();
 						_process->storeDWord(addr, _eax);
-						printf(" mov_eax: %08x to memory[%08x]\n", _eax, addr);
+						trace(" mov_eax: %08x to memory[%08x]\n", _eax, addr);
 					}
 					break;
 				
 				case 0xB8:
 					_eax = getLongPC();
-					printf(" mov_eax, %08x\n", _eax);
+					trace(" mov_eax, %08x\n", _eax);
 					break;
 				
 				case 0xB9:
 					_ecx = getLongPC();
-					printf(" mov_ecx, %08x\n", _ecx);
+					trace(" mov_ecx, %08x\n", _ecx);
 					break;
 				
+				case 0xBA:
+					_edx = getLongPC();
+					trace("mov_ebx, %08x\n", _ebx);
+					break;
+
 				case 0xBB:
 					_ebx = getLongPC();
-					printf("mov_ebx, %08x\n", _ebx);
+					trace("mov_ebx, %08x\n", _ebx);
 					break;
 
 				case 0xC1:
@@ -799,7 +833,7 @@ public:
 						case 0xE7: 
 							opcode = getPC();
 							_edi = _edi << opcode;
-							printf(" shl_edi, %d %08x\n", opcode, _edi);
+							trace(" shl_edi, %d %08x\n", opcode, _edi);
 							break;
 							
 						default:
@@ -810,12 +844,12 @@ public:
 					
 				case 0xC3:
 					_pc = _process->pop();
-					printf(" ret to %02x\n", _pc);
+					trace(" ret to %02x\n", _pc);
 					break;
 					
 				case 0xCD:
 					opcode = getPC();
-					printf(" int %02x\n", opcode);
+					trace(" int %02x\n", opcode);
 					switch (opcode)
 					{
 						case 0x80:
@@ -865,13 +899,13 @@ public:
 									break;
 									
 								default:
-									printf("Unknown system call %02x\n", _eax);
+									trace("Unknown system call %02x\n", _eax);
 									return;
 							}
 							break;
 						
 						default:
-							printf("Unknown interupt %02x\n", opcode);
+							trace("Unknown interupt %02x\n", opcode);
 							return;
 					}
 					break;
@@ -881,15 +915,15 @@ public:
 						int32_t offset = (int32_t)getLongPC();
 						_process->push(_pc);
 						_pc += offset;
-						printf(" call %08x\n", _pc);
+						trace(" call %08x\n", _pc);
 					}
 					break;
 					
 				case 0xEB:
 					opcode = getPC();
-					printf(" jmp\n");
+					trace(" jmp\n");
 					_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-					printf("  => jump to %08x\n", _pc);
+					trace("  => jump to %08x\n", _pc);
 					break;
 
 				default:
@@ -911,7 +945,7 @@ public:
 				break;
 		}
 		const char *fullname = name_in_root(filename);
-		printf(" Open File %s %d %d =>", fullname, _ecx, _edx);
+		printf(" Open ProgramFile %s %d %d =>", fullname, _ecx, _edx);
 		int fh = open(fullname, _ecx, _edx);
 		printf(" %d\n", fh);
 		if (fh <= 0)
@@ -949,14 +983,14 @@ public:
 			if (r == 0)
 				break;
 			_process->storeByte(_ecx + i, buffer);
-			printf(" read %02x", buffer);
 			if (buffer > ' ' && buffer < 127)
-				printf(": %c", buffer);
-			printf(" to %08x\n", _ecx + i);
+				trace(" read %02x: %c to %08x\n", buffer, buffer, _ecx + i);
+			else
+				trace(" read %02x to %08x\n", buffer, _ecx + i);
 		}
 		if (i == 0)
 			_eax = -4; // EOF
-		printf(" read %d bytes\n", i);
+		trace(" read %d bytes\n", i);
 		_eax = i;
 	}		
 
@@ -966,10 +1000,10 @@ public:
 		for (; i < _edx; i++)
 		{
 			byte buffer = _process->loadByte(_ecx + i);
-			printf(" write %02x", buffer);
 			if (buffer > ' ' && buffer < 127)
-				printf(": %c", buffer);
-			printf(" from %08x\n", _ecx + i);
+				trace(" write %02x: %c from %08x\n", buffer, buffer, _ecx + i);
+			else
+				trace(" write %02x from %08x\n", buffer, _ecx + i);
 			int r = write(_ebx, &buffer, 1);
 			if (r == -1)
 			{
@@ -978,7 +1012,7 @@ public:
 				return;
 			}
 		}
-		printf(" wrote %d bytes\n", i);
+		trace(" wrote %d bytes\n", i);
 		_eax = i;
 	}
 	
@@ -1043,7 +1077,7 @@ public:
 		}
 		
 		
-		File program;
+		ProgramFile program;
 		if (!program.open(prog_name))
 		{
 			fprintf(stderr, "Could not read '%s'\n", prog_name);
@@ -1070,26 +1104,27 @@ public:
 	
 	void int_sys_brk()
 	{
-		printf(" sys_brk %08x:", _ebx);
+		trace(" sys_brk %08x:", _ebx);
 		if (_ebx < _process->end_code)
 		{
 			_eax = _process->brk;
-			printf(" init on");
+			trace(" init on");
 		}
 		else
 		{
 			_eax = (_ebx + 0xfff) & 0xfffff000;
 			if (_eax > _process->brk)
 			{
-				printf(" extend to");
+				trace(" extend to");
 				_process->brk = _eax;
 			}
 		}
-		printf(" %08x\n", _eax);
+		trace(" %08x\n", _eax);
 	}
 	
 	void unknownOpcode()
 	{
+		print_trace(stdout);
 		printf("Unknown opcode in %s\n", _process->name);
 	}
 
@@ -1097,7 +1132,7 @@ private:
 	byte getPC()
 	{
 		byte v = _process->loadByte(_pc);
-		printf("pc = %08x %02x\n", _pc, v);
+		trace("pc = %08x %02x\n", _pc, v);
 		_pc++;
 		return v;
 	}
@@ -1114,9 +1149,9 @@ private:
 		return val;
 	}
 	
-	void set_al(byte val) { _eax = (_eax & 0xffffff00L) | (uint32_t)val; printf(" eax = %08x\n", _eax); } 
-	void set_cx(unsigned short val) { _ecx = (_ecx & 0xffff0000L) | (uint32_t)val; printf(" ecx = %08x\n", _ecx); } 
-	void set_dx(unsigned short val) { _edx = (_edx & 0xffff0000L) | (uint32_t)val; printf(" edx = %08x\n", _edx);} 
+	void set_al(byte val) { _eax = (_eax & 0xffffff00L) | (uint32_t)val; trace(" eax = %08x\n", _eax); } 
+	void set_cx(unsigned short val) { _ecx = (_ecx & 0xffff0000L) | (uint32_t)val; trace(" ecx = %08x\n", _ecx); } 
+	void set_dx(unsigned short val) { _edx = (_edx & 0xffff0000L) | (uint32_t)val; trace(" edx = %08x\n", _edx);} 
 
 	Process *_process;
 	uint32_t _pc;
@@ -1140,7 +1175,7 @@ int main(int argc, char *argv[])
 
 	root_dir = argv[1];
 		
-	File program;
+	ProgramFile program;
 	if (!program.open(argv[2]))
 	{
 		fprintf(stderr, "Could not read '%s'\n", argv[2]);
