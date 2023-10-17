@@ -8,7 +8,7 @@
 #include <string.h>
 #include <stdarg.h>
 
-const char *copystr(const char *v)
+char *copystr(const char *v)
 {
 	char *result = (char*)malloc(strlen(v) + 1);
 	strcpy(result, v);
@@ -46,11 +46,15 @@ void print_trace(FILE *f)
 
 typedef unsigned char byte;
 
-	
+
+
 class Process
 {
 public:
 	const char *name;
+	int argc;
+	char **argv;
+	char **env;
 	
 	byte **memory[256];
 	
@@ -60,7 +64,9 @@ public:
 	uint32_t brk;
 	Process *parent;
 	
-	Process(Process *_parent = 0) : parent(_parent)
+	Process *next;
+	
+	Process(Process *_parent = 0) : parent(_parent), next(0)
 	{
 		name = "";
 		
@@ -102,6 +108,10 @@ public:
 
 	void init(int argc, char *argv[], char *env[])
 	{
+		this->argc = argc;
+		this->argv = argv;
+		this->env = env;
+		
 		uint32_t p = 4;
 		
 		int nr_env = 0;
@@ -207,6 +217,16 @@ public:
 	}
 };
 
+Process *processes = 0;
+
+Process *newProcess(Process *parent)
+{
+	static Process **ref_next_process = &processes;
+	Process *process = new Process(parent);
+	*ref_next_process = process;
+	ref_next_process = &process->next;
+	return process;
+}
 
 char *root_dir = 0;
 char *name_in_root(const char *name)
@@ -963,7 +983,7 @@ public:
 	void int_fork()
 	{
 		_process->pc = _pc;
-		_process = new Process(_process);
+		_process = newProcess(_process);
 		_eax = 0;
 	}
 	
@@ -1028,17 +1048,18 @@ public:
 
 		printf(" execve\n  |%s|\n", prog_name);
 		
-#define MAX_NR_ARGC 500
 #define MAX_ARG_LEN 500
 		
 		int argc = 0;
-		char *argv[MAX_NR_ARGC];
-		for (; argc < MAX_NR_ARGC; argc++)
+		while (_process->loadDWord(_ecx + 4 * argc) != 0)
+			argc++;
+		char **argv = (char **)malloc(sizeof(char *) * (argc + 1));
+		argv[argc] = 0;
+		
+		for (int j = 0; j < argc; j++)
 		{
-			uint32_t addr = _process->loadDWord(_ecx + 4 * argc);
-			if (addr == 0)
-				break;
-			
+			uint32_t addr = _process->loadDWord(_ecx + 4 * j);
+
 			char arg[MAX_ARG_LEN];
 			int i = 0;
 			for (; i < MAX_ARG_LEN; i++)
@@ -1047,22 +1068,22 @@ public:
 				if (arg[i] == 0)
 					break;
 			}
-			printf(" %d |%s|\n", argc, arg);
-			argv[argc] = (char*)malloc(i);
-			strcpy(argv[argc], arg);
+			printf(" %d |%s|\n", j, arg);
+			argv[j] = copystr(arg);
 		}
 		
-#define MAX_NR_ENV 500
 #define MAX_ENV_LEN 500
 		
 		int envc = 0;
-		char *env[MAX_NR_ENV];
-		for (; envc < MAX_NR_ENV; envc++)
+		while (_process->loadDWord(_edx + 4 * envc) != 0)
+			envc++;
+		char **env = (char **)malloc(sizeof(char *) * (envc + 1));
+		env[envc] = 0;
+		
+		for (int j = 0; j < envc; j++)
 		{
-			uint32_t addr = _process->loadDWord(_edx + 4 * envc);
-			if (addr == 0)
-				break;
-			
+			uint32_t addr = _process->loadDWord(_edx + 4 * j);
+
 			char arg[MAX_ENV_LEN];
 			int i = 0;
 			for (; i < MAX_ENV_LEN; i++)
@@ -1071,9 +1092,8 @@ public:
 				if (arg[i] == 0)
 					break;
 			}
-			printf(" env %d |%s|\n", envc, arg);
-			env[envc] = (char*)malloc(i);
-			strcpy(env[envc], arg);
+			printf(" env %d |%s|\n", j, arg);
+			env[j] = copystr(arg);
 		}
 		
 		
@@ -1093,12 +1113,6 @@ public:
 		_process->init(argc, argv, env);
 		_pc = _process->pc;
 		
-		for (int i = 0; i < argc; i++)
-			delete(argv[i]);
-
-		for (int i = 0; i < envc; i++)
-			delete(env[i]);
-
 		return true;
 	}
 	
