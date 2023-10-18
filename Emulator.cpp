@@ -1,3 +1,7 @@
+/*
+	http://ref.x86asm.net/geek.html
+	https://www.felixcloutier.com/x86/
+*/
 #include <malloc.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -574,6 +578,14 @@ public:
 					}
 					break;
 				
+				case 0x05:
+					{
+						uint32_t offset = getLongPC();
+						_eax += offset;
+						trace(" add_eax %08x: %08x\n", offset, _eax);
+					}
+					break;
+					
 				case 0x0F:
 					opcode = getPC();
 					switch (opcode)
@@ -581,10 +593,48 @@ public:
 						case 0x84:
 							{
 								uint32_t offset = getLongPC();
+								trace(" je\n");
 								if (_flags == 0)
 								{
 									_pc += offset;
 								}
+							}
+							break;
+							
+						case 0x85:
+							{
+								uint32_t offset = getLongPC();
+								trace(" jne\n");
+								if (_flags != 0)
+								{
+									_pc += offset;
+								}
+							}
+							break;
+							
+						case 0x8C:
+							{
+								uint32_t offset = getLongPC();
+								trace(" jl\n");
+								if (_flags < 0)
+								{
+									_pc += offset;
+								}
+							}
+							break;
+							
+						case 0xB6: // https://www.felixcloutier.com/x86/movzx
+							opcode = getPC();
+							switch (opcode)
+							{
+								case 0xC0:
+									_eax = _eax & 0xFF;
+									trace(" movzx _eax: %08x\n", _eax);
+									break;
+									
+								default:
+									unknownOpcode();
+									return;
 							}
 							break;
 							
@@ -784,7 +834,31 @@ public:
 							_ebx += opcode;
 							trace(" add_ecx %02x\n", opcode);
 							break;
-							
+						
+						case 0xC7:
+							opcode = getPC();
+							_edi += opcode;
+							trace(" add_ecx %02x\n", opcode);
+							break;
+						
+						case 0xE8: // https://www.felixcloutier.com/x86/sub
+							opcode = getPC();
+							_eax -= opcode;
+							trace(" sub _eax %02x: %08x\n", opcode, _eax);
+							break;
+								
+						case 0xF8: // https://www.felixcloutier.com/x86/cmp
+							opcode = getPC();
+							_flags = (_eax & 0xFF) - opcode;
+							trace(" cmp _eax %02x: %08x\n", opcode, _flags);
+							break;
+								
+						case 0xFD: // https://www.felixcloutier.com/x86/cmp
+							opcode = getPC();
+							_flags = _ebp - opcode;
+							trace(" cmp _ebp %02x: %08x\n", opcode, _flags);
+							break;
+								
 						default:
 							unknownOpcode();
 							return;
@@ -840,15 +914,20 @@ public:
 						case 0x01:
 							_process->storeDWord(_ecx, _eax);
 							trace(" mov_[ecx:%08x],eax %08x\n", _ecx, _eax);
-						break;
+							break;
 						
 						case 0x1D:
-						{
-							uint32_t addr = getLongPC();
-							_process->storeDWord(addr, _ebx);
-							trace(" mov_ebx: %08x to memory[%08x]\n", _ebx, addr);
-						}
-						break;
+							{
+								uint32_t addr = getLongPC();
+								_process->storeDWord(addr, _ebx);
+								trace(" mov_ebx: %08x to memory[%08x]\n", _ebx, addr);
+							}
+							break;
+						
+						case 0x38:
+							_process->storeDWord(_eax, _edi);
+							trace(" mov_edi: %08x to memory[eax:%08x]\n", _edi, _eax);
+							break;
 						
 						case 0xC1: _ecx = _eax; trace(" mov_ecx,eax = %08x\n", _ecx); break;
 						case 0xC2: _edx = _eax; trace(" mov_edx,eax = %08x\n", _edx); break;
@@ -938,6 +1017,14 @@ public:
 					}
 					break;
 					
+				case 0xA0:
+					{
+						uint32_t addr = getLongPC();
+						set_al(_process->loadByte(addr));
+						trace(" mov_al: %08x from memory[%08x]\n", _eax, addr);
+					}
+					break;
+						
 				case 0xA1:
 					{
 						uint32_t addr = getLongPC();
@@ -954,31 +1041,25 @@ public:
 					}
 					break;
 				
-				case 0xB8:
-					_eax = getLongPC();
-					trace(" mov_eax, %08x\n", _eax);
-					break;
-				
-				case 0xB9:
-					_ecx = getLongPC();
-					trace(" mov_ecx, %08x\n", _ecx);
-					break;
-				
-				case 0xBA:
-					_edx = getLongPC();
-					trace("mov_ebx, %08x\n", _ebx);
-					break;
-
-				case 0xBB:
-					_ebx = getLongPC();
-					trace("mov_ebx, %08x\n", _ebx);
-					break;
+				case 0xB8: _eax = getLongPC(); trace(" mov_eax, %08x\n", _eax); break;
+				case 0xB9: _ecx = getLongPC(); trace(" mov_ecx, %08x\n", _ecx); break;
+				case 0xBA: _edx = getLongPC(); trace(" mov_edx, %08x\n", _edx); break;
+				case 0xBB: _ebx = getLongPC(); trace(" mov_ebx, %08x\n", _ebx); break;
+				case 0xBD: _ebp = getLongPC(); trace(" mov_ebp, %08x\n", _ebp); break;
+				case 0xBE: _esi = getLongPC(); trace(" mov_esi, %08x\n", _esi); break;
+				case 0xBF: _edi = getLongPC(); trace(" mov_edi, %08x\n", _edi); break;
 
 				case 0xC1:
 					opcode = getPC();
 					switch (opcode)
 					{
-						case 0xE7: 
+						case 0xE0:
+							opcode = getPC();
+							_eax = _eax << opcode;
+							trace(" shl_edi, %d %08x\n", opcode, _edi);
+							break;
+							
+						case 0xE7:
 							opcode = getPC();
 							_edi = _edi << opcode;
 							trace(" shl_edi, %d %08x\n", opcode, _edi);
@@ -1046,13 +1127,15 @@ public:
 									break;
 									
 								default:
-									trace("Unknown system call %02x\n", _eax);
+								    print_trace(stdout);
+									printf("Unknown system call %02x\n", _eax);
 									return;
 							}
 							break;
 						
 						default:
-							trace("Unknown interupt %02x\n", opcode);
+						    print_trace(stdout);
+							printf("Unknown interupt %02x\n", opcode);
 							return;
 					}
 					break;
@@ -1066,6 +1149,14 @@ public:
 					}
 					break;
 					
+				case 0xE9:
+					{
+						int32_t offset = (int32_t)getLongPC();
+						_pc += offset;
+						trace(" jmp %08x\n", _pc);
+					}
+					break;
+					
 				case 0xEB:
 					opcode = getPC();
 					trace(" jmp\n");
@@ -1073,6 +1164,21 @@ public:
 					trace("  => jump to %08x\n", _pc);
 					break;
 
+				case 0xF7:
+					opcode = getPC();
+					switch (opcode)
+					{
+						case 0xD5:
+							_ebp = ~_ebp;
+							trace(" bitwnot ebp\n", opcode, _ebp);
+							break;
+							
+						default:
+							unknownOpcode();
+							return;
+					}
+					break;
+					
 				default:
 					unknownOpcode();
 					return;

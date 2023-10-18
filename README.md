@@ -30,3 +30,10 @@ This ends with a message about an unknown opcode in the `hex1`.
 I also made some changes such that the generated files are placed in the directory
 `x86/artifact` where the the emulator is executed.
 The next step will be to be able to process that the `hex1` file.
+
+## parsing hex1
+
+My next goal was to have the emulator being able to process the `hex1` file.
+I made some progress and found some interesting resources:
+* [X86 Opcode and Instruction Reference Home](http://ref.x86asm.net/geek.html#two-byte)
+* [x86 and amd64 instruction reference](https://www.felixcloutier.com/x86/)
