@@ -24,17 +24,29 @@ char *copystr(const char *v)
 char messages[MAX_NR_MESSAGES][MAX_MESSAGE_LEN];
 int message_nr = 0;
 
+int indent_depth = 0;
+void indent(FILE *fout) { fprintf(fout, "%*.*s", indent_depth, indent_depth, ""); }
+
+bool out_trace = false;
+
 void trace(const char* format, ...)
 {
 	va_list argp;
 	va_start(argp, format);
-#if 0
-	vfprintf(stdout, format, argp);
-#else
-	vsnprintf(messages[message_nr], MAX_MESSAGE_LEN, format, argp);
-	messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
-	message_nr = (message_nr + 1) % MAX_NR_MESSAGES;
-#endif
+	if (out_trace)
+	{
+		indent(stdout);
+		vfprintf(stdout, format, argp);
+	}
+	else
+	{
+		char *s = messages[message_nr];
+		for (int i = 0; i < indent_depth; i++)
+			*s++ = ' ';
+		vsnprintf(s, MAX_MESSAGE_LEN - indent_depth, format, argp);
+		messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
+		message_nr = (message_nr + 1) % MAX_NR_MESSAGES;
+	}
 	va_end(argp);
 }
 
@@ -49,8 +61,6 @@ void print_trace(FILE *f)
 }
 
 
-int indent_depth = 0;
-void indent(FILE *fout) { fprintf(fout, "%*.*s", indent_depth, indent_depth, ""); }
 
 
 
@@ -567,6 +577,11 @@ public:
 							trace(" add_ebx,eax %08x\n", _eax);
 							break;
 							
+						case 0xF0:
+							_eax += _esi;
+							trace(" add_eax,esi %08x\n", _eax);
+							break;
+							
 						case 0xF8:
 							_eax += _edi;
 							trace(" add_eax,edi %08x\n", _eax);
@@ -593,10 +608,11 @@ public:
 						case 0x84:
 							{
 								uint32_t offset = getLongPC();
-								trace(" je\n");
+								trace(" je %d\n", _flags);
 								if (_flags == 0)
 								{
 									_pc += offset;
+									trace("  => jump to %08x\n\n", _pc);
 								}
 							}
 							break;
@@ -604,10 +620,11 @@ public:
 						case 0x85:
 							{
 								uint32_t offset = getLongPC();
-								trace(" jne\n");
+								trace(" jne %d\n", _flags);
 								if (_flags != 0)
 								{
 									_pc += offset;
+									trace("  => jump to %08x\n\n", _pc);
 								}
 							}
 							break;
@@ -615,10 +632,11 @@ public:
 						case 0x8C:
 							{
 								uint32_t offset = getLongPC();
-								trace(" jl\n");
+								trace(" jl %d\n", _flags);
 								if (_flags < 0)
 								{
 									_pc += offset;
+									trace("  => jump to %08x\n\n", _pc);
 								}
 							}
 							break;
@@ -644,6 +662,21 @@ public:
 					}
 					break;
 				
+				case 0x29:
+					opcode = getPC();
+					switch(opcode)
+					{
+						case 0xF8:
+							_eax -= _edi;
+							trace(" sub_edi:%08x from eax: %08xc\n", _edi, _eax);
+							break;
+						
+						default:
+							unknownOpcode();
+							return;
+					}
+					break;
+					
 				case 0x2C:
 					opcode = getPC();
 					trace(" sub_al, %d\n", opcode);
@@ -771,21 +804,21 @@ public:
 				
 				case 0x74:
 					opcode = getPC();
-					trace(" je %02X\n", opcode);
+					trace(" je %02X %d\n", opcode, _flags);
 					if (_flags == 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
 				case 0x75:
 					opcode = getPC();
-					trace(" jne %02X\n", opcode);
+					trace(" jne %02X %d\n", opcode, _flags);
 					if (_flags != 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
@@ -795,27 +828,27 @@ public:
 					if (_flags < 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
 				case 0x7D:
 					opcode = getPC();
-					trace(" jge %02X\n", opcode);
+					trace(" jge %02X %d\n", opcode, _flags);
 					if (_flags >= 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
 				case 0x7E:
 					opcode = getPC();
-					trace(" jle %02X\n", opcode);
+					trace(" jle %02X %d\n", opcode, _flags);
 					if (_flags <= 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n", _pc);
+						trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
@@ -849,7 +882,7 @@ public:
 								
 						case 0xF8: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
-							_flags = (_eax & 0xFF) - opcode;
+							_flags = (char)((_eax & 0xFF) - opcode);
 							trace(" cmp _eax %02x: %08x\n", opcode, _flags);
 							break;
 								
@@ -968,6 +1001,11 @@ public:
 					opcode = getPC();
 					switch (opcode)
 					{
+						case 0x00:
+							_eax = _process->loadDWord(_eax);
+							trace(" mov_eax,[eax] %08x\n", _eax);
+							break; 
+						
 						case 0x03:
 							_eax = _process->loadDWord(_ebx);
 							trace(" mov_eax,[ebx:%08x] %08x\n", _ebx, _eax);
@@ -1033,6 +1071,14 @@ public:
 					}
 					break;
 						
+				case 0xA2:
+					{
+						uint32_t addr = getLongPC();
+						_process->storeByte(addr, _eax & 0xFF);
+						trace(" mov_al: %02x to memory[%08x]\n", _eax & 0xFF, addr);
+					}
+					break;
+						
 				case 0xA3:
 					{
 						uint32_t addr = getLongPC();
@@ -1056,7 +1102,13 @@ public:
 						case 0xE0:
 							opcode = getPC();
 							_eax = _eax << opcode;
-							trace(" shl_edi, %d %08x\n", opcode, _edi);
+							trace(" shl_eax, %d %08x\n", opcode, _eax);
+							break;
+							
+						case 0xE6:
+							opcode = getPC();
+							_esi = _esi << opcode;
+							trace(" shl_esi, %d %08x\n", opcode, _esi);
 							break;
 							
 						case 0xE7:
@@ -1073,7 +1125,8 @@ public:
 					
 				case 0xC3:
 					_pc = _process->pop();
-					trace(" ret to %02x\n", _pc);
+					trace(" ret to %02x\n\n", _pc);
+					indent_depth -= 2;
 					break;
 					
 				case 0xCD:
@@ -1122,6 +1175,10 @@ public:
 										return;
 									break;
 										
+								case 0x13:
+									int_lseek();
+									break;
+									
 								case 0x2D:
 									int_sys_brk();
 									break;
@@ -1145,7 +1202,8 @@ public:
 						int32_t offset = (int32_t)getLongPC();
 						_process->push(_pc);
 						_pc += offset;
-						trace(" call %08x\n", _pc);
+						trace(" call %08x\n\n", _pc);
+						indent_depth += 2;
 					}
 					break;
 					
@@ -1154,6 +1212,7 @@ public:
 						int32_t offset = (int32_t)getLongPC();
 						_pc += offset;
 						trace(" jmp %08x\n", _pc);
+						trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 					
@@ -1161,7 +1220,7 @@ public:
 					opcode = getPC();
 					trace(" jmp\n");
 					_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-					trace("  => jump to %08x\n", _pc);
+					trace("  => jump to %08x\n\n", _pc);
 					break;
 
 				case 0xF7:
@@ -1240,7 +1299,7 @@ public:
 			if (r == -1)
 			{
 				_eax = -4; // EOF
-				printf(" read errno\n");
+				trace(" read errno\n");
 				return;
 			}
 			if (r == 0)
@@ -1271,7 +1330,7 @@ public:
 			if (r == -1)
 			{
 				_eax = errno;
-				printf(" write errno %d\n", _eax);
+				trace(" write errno %d\n", _eax);
 				return;
 			}
 		}
@@ -1362,6 +1421,12 @@ public:
 		_pc = _process->pc;
 		
 		return true;
+	}
+	
+	void int_lseek()
+	{
+		trace(" lseek\n");
+		_eax = lseek(_ebx, _ecx, _edx);
 	}
 	
 	void int_sys_brk()
