@@ -28,6 +28,7 @@ int indent_depth = 0;
 void indent(FILE *fout) { fprintf(fout, "%*.*s", indent_depth, indent_depth, ""); }
 
 bool out_trace = false;
+int nr_ret;
 
 void trace(const char* format, ...)
 {
@@ -38,15 +39,12 @@ void trace(const char* format, ...)
 		indent(stdout);
 		vfprintf(stdout, format, argp);
 	}
-	else
-	{
-		char *s = messages[message_nr];
-		for (int i = 0; i < indent_depth; i++)
-			*s++ = ' ';
-		vsnprintf(s, MAX_MESSAGE_LEN - indent_depth, format, argp);
-		messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
-		message_nr = (message_nr + 1) % MAX_NR_MESSAGES;
-	}
+	char *s = messages[message_nr];
+	for (int i = 0; i < indent_depth; i++)
+		*s++ = ' ';
+	vsnprintf(s, MAX_MESSAGE_LEN - indent_depth, format, argp);
+	messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
+	message_nr = (message_nr + 1) % MAX_NR_MESSAGES;
 	va_end(argp);
 }
 
@@ -116,6 +114,7 @@ class Process
 {
 public:
 	const char *name;
+	int nr;
 	int argc;
 	char **argv;
 	char **env;
@@ -135,6 +134,9 @@ public:
 	Process(Process *_parent = 0) : parent(_parent), uses(0), next(0)
 	{
 		name = "";
+		
+		static int nr_of_processes = 0;
+		nr = ++nr_of_processes;
 		
 		for (int i = 0; i < 256; i++)
 			memory[i] = 0;
@@ -554,6 +556,8 @@ bool loadELF(ProgramFile *file, Process *process)
 	return true;
 }
 
+#define SIGNEXT(X) ((uint32_t)(char)(X))
+
 class Processor
 {
 public:
@@ -746,6 +750,7 @@ public:
 					
 				case 0x4D:
 					_ebp--;
+					trace(" dec ebp: %08x\n", _ebp);
 					break;
 					
 				case 0x50: _process->push(_eax); trace(" push_eax\n"); break;
@@ -775,12 +780,12 @@ public:
 					
 				case 0x5D:
 					_ebp = _process->pop();
-					trace(" pop_eax: %08x\n", _eax);
+					trace(" pop_ebp: %08x\n", _ebp);
 					break;
 					
 				case 0x6A:
 					opcode = getPC();
-					_process->push((uint32_t)(char)opcode);
+					_process->push(SIGNEXT(opcode));
 					trace(" push %02x\n", opcode);
 					break;
 				
@@ -858,37 +863,37 @@ public:
 					{
 						case 0xC1:
 							opcode = getPC();
-							_ecx += opcode;
+							_ecx += SIGNEXT(opcode);
 							trace(" add_ecx %02x\n", opcode);
 							break;
 							
 						case 0xC3:
 							opcode = getPC();
-							_ebx += opcode;
+							_ebx += SIGNEXT(opcode);
 							trace(" add_ecx %02x\n", opcode);
 							break;
 						
 						case 0xC7:
 							opcode = getPC();
-							_edi += opcode;
-							trace(" add_ecx %02x\n", opcode);
+							_edi += SIGNEXT(opcode);
+							trace(" add_edi %02x: %08x\n", opcode, _edi);
 							break;
 						
 						case 0xE8: // https://www.felixcloutier.com/x86/sub
 							opcode = getPC();
-							_eax -= opcode;
+							_eax -= SIGNEXT(opcode);
 							trace(" sub _eax %02x: %08x\n", opcode, _eax);
 							break;
 								
 						case 0xF8: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
-							_flags = (char)((_eax & 0xFF) - opcode);
+							_flags = _eax - SIGNEXT(opcode);
 							trace(" cmp _eax %02x: %08x\n", opcode, _flags);
 							break;
 								
 						case 0xFD: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
-							_flags = _ebp - opcode;
+							_flags = _ebp - SIGNEXT(opcode);
 							trace(" cmp _ebp %02x: %08x\n", opcode, _flags);
 							break;
 								
@@ -1127,6 +1132,8 @@ public:
 					_pc = _process->pop();
 					trace(" ret to %02x\n\n", _pc);
 					indent_depth -= 2;
+					if (out_trace && --nr_ret == 0)
+						out_trace = false;
 					break;
 					
 				case 0xCD:
@@ -1139,15 +1146,13 @@ public:
 							{
 								case 0x01:
 									// Exit
-									if (_process->parent != 0)
-									{
-										_process->finish();
-										_process = _process->parent;
-										_pc = _process->pc;
-										_eax = 1;
-									}
-									else
+									if (_process->parent == 0)
 										return;
+									_process->finish();
+									_process = _process->parent;
+									_pc = _process->pc;
+									printf("Continue executing process %d\n", _process->nr);
+									_eax = 1;
 									break;
 
 								case 0x02:
@@ -1305,7 +1310,7 @@ public:
 			if (r == 0)
 				break;
 			_process->storeByte(_ecx + i, buffer);
-			if (buffer > ' ' && buffer < 127)
+			if (buffer >= ' ' && buffer < 127)
 				trace(" read %02x: %c to %08x\n", buffer, buffer, _ecx + i);
 			else
 				trace(" read %02x to %08x\n", buffer, _ecx + i);
@@ -1419,6 +1424,7 @@ public:
 		
 		_process->init(argc, argv, env);
 		_pc = _process->pc;
+		printf("Start running process %d\n", _process->nr);
 		
 		return true;
 	}
