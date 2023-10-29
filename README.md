@@ -41,3 +41,7 @@ I made some progress and found some interesting resources:
 
 After some debugging, for which modified the code to be able to do some debugging,
 I managed to implement this in commit [f88cf442](https://github.com/FransFaase/Emulator/tree/f88cf442fc03696d4dbe78c2b5c678c8818476ff)
+
+There appeared to be another bug, which took me a lot of time, and is related to the fact
+that sign extension was not used for certain subtract and compare instructions (0x83).
+This bug is solved in the commit [5e37d614](https://github.com/FransFaase/Emulator/commit/5e37d614427c412a11375fbfb90e8c4a089b3323).
