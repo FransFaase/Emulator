@@ -45,3 +45,13 @@ I managed to implement this in commit [f88cf442](https://github.com/FransFaase/E
 There appeared to be another bug, which took me a lot of time, and is related to the fact
 that sign extension was not used for certain subtract and compare instructions (0x83).
 This bug is solved in the commit [5e37d614](https://github.com/FransFaase/Emulator/commit/5e37d614427c412a11375fbfb90e8c4a089b3323).
+
+## Seems we have a working hex2-0
+
+With comment [df17a9eb](https://github.com/FransFaase/Emulator/commit/df17a9eb9716b81b3212472286a8ee404b223871)
+it seems we have a working `hex2-0` program. From `M0.hex2` it did produce an `M0` executable,
+but it looks like the `M0` contains instruction that have not been implemented yet
+in the emulator. Again, I spend substantial time debugging, looking at output
+and comparing it with the input files. It cannot be excluded that there are still
+bugs in the current Emulator that have resulted in an incorrect working `hex2-0`
+program.
