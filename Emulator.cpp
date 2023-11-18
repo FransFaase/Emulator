@@ -23,10 +23,12 @@ char *copystr(const char *v)
 #define MAX_MESSAGE_LEN 200
 char messages[MAX_NR_MESSAGES][MAX_MESSAGE_LEN];
 int message_nr = 0;
+bool message_round = false;
 
 int indent_depth = 0;
 void indent(FILE *fout) { fprintf(fout, "%*.*s", indent_depth, indent_depth, ""); }
 
+bool do_trace = false;
 bool out_trace = false;
 int nr_ret;
 
@@ -44,7 +46,11 @@ void trace(const char* format, ...)
 		*s++ = ' ';
 	vsnprintf(s, MAX_MESSAGE_LEN - indent_depth, format, argp);
 	messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
-	message_nr = (message_nr + 1) % MAX_NR_MESSAGES;
+	if (++message_nr >= MAX_NR_MESSAGES)
+	{
+		message_nr = 0;
+		message_round = true;
+	}
 	va_end(argp);
 }
 
@@ -66,8 +72,9 @@ void trace_ni(const char* format, ...)
 void print_trace(FILE *f)
 {
 	printf("---\n");
-	for (int i = message_nr; i < MAX_NR_MESSAGES; i++)
-		printf("%s", messages[i]);
+	if (message_round)
+		for (int i = message_nr; i < MAX_NR_MESSAGES; i++)
+			printf("%s", messages[i]);
 	for (int i = 0; i < message_nr; i++)
 		printf("%s", messages[i]);
 	printf("---\n");
@@ -285,7 +292,7 @@ public:
 	void push(uint32_t value)
 	{
 		sp -= 4;
-		trace("push %08x to %08x\n", value, sp);
+		if (do_trace) trace("push %08x to %08x\n", value, sp);
 		storeByte(sp    , (byte)value);
 		storeByte(sp + 1, (byte)(value >> 8));
 		storeByte(sp + 2, (byte)(value >> 16));
@@ -304,7 +311,7 @@ public:
 		value |= ((uint32_t)loadByte(sp + 1)) << 8;
 		value |= ((uint32_t)loadByte(sp + 2)) << 16;
 		value |= ((uint32_t)loadByte(sp + 3)) << 24;
-		trace("pop %08x from %08x\n", value, sp);
+		if (do_trace) trace("pop %08x from %08x\n", value, sp);
 		sp += 4;
 		
 		return value;
@@ -441,8 +448,8 @@ public:
 		length = read(fh, data, length);
 		printf("Length %08x\n", length);
 		for (uint32_t i = 0; i < length; i++)
-			trace("%02X ", data[i]);
-		trace("\n");
+			if (do_trace) trace("%02X ", data[i]);
+		if (do_trace) trace("\n");
 		fclose(f);
 		return true;
 	}
@@ -462,7 +469,7 @@ public:
 		result |= (uint32_t)data[i++] << 8;
 		result |= (uint32_t)data[i++] << 16;
 		result |= (uint32_t)data[i++] << 24;
-		trace("readLong %08x %08x\n", i - 4, result);
+		if (do_trace) trace("readLong %08x %08x\n", i - 4, result);
 		return result;
 	}
 };
@@ -604,7 +611,7 @@ public:
 		_pc = _process->pc;
 		for (;;)
 		{
-			trace("%08x ", _pc);
+			if (do_trace) trace("%08x ", _pc);
 			byte opcode = getPC();
 			
 			switch (opcode)
@@ -615,22 +622,22 @@ public:
 					{
 						case 0xC3:
 							_ebx += _eax;
-							trace(" add_ebx,eax %08x\n", _ebx);
+							if (do_trace) trace(" add_ebx,eax %08x\n", _ebx);
 							break;
 							
 						case 0xC8:
 							_eax += _ecx;
-							trace(" add_eax,ecx %08x\n", _eax);
+							if (do_trace) trace(" add_eax,ecx %08x\n", _eax);
 							break;
 							
 						case 0xF0:
 							_eax += _esi;
-							trace(" add_eax,esi %08x\n", _eax);
+							if (do_trace) trace(" add_eax,esi %08x\n", _eax);
 							break;
 							
 						case 0xF8:
 							_eax += _edi;
-							trace(" add_eax,edi %08x\n", _eax);
+							if (do_trace) trace(" add_eax,edi %08x\n", _eax);
 							break;
 							
 						default:
@@ -648,7 +655,7 @@ public:
 								uint32_t addr = getLongPC();
 								uint32_t value = _process->loadDWord(addr);
 								_eax += value;
-								trace(" add_eax,memory[%08x]:%08x: %08x\n", addr, value, _eax);
+								if (do_trace) trace(" add_eax,memory[%08x]:%08x: %08x\n", addr, value, _eax);
 							}
 							break;
 							
@@ -661,14 +668,14 @@ public:
 				case 0x04:
 					opcode = getPC();
 					set_al((byte)(_eax & 0xFF) + opcode);
-					trace(" addi8_al %02x %08x\n", opcode, _eax);
+					if (do_trace) trace(" addi8_al %02x %08x\n", opcode, _eax);
 					break;
 					
 				case 0x05:
 					{
 						uint32_t offset = getLongPC();
 						_eax += offset;
-						trace(" add_eax %08x: %08x\n", offset, _eax);
+						if (do_trace) trace(" add_eax %08x: %08x\n", offset, _eax);
 					}
 					break;
 					
@@ -679,11 +686,11 @@ public:
 						case 0x84:
 							{
 								uint32_t offset = getLongPC();
-								trace(" je %d\n", _flags);
+								if (do_trace) trace(" je %d\n", _flags);
 								if (_flags == 0)
 								{
 									_pc += offset;
-									trace("  => jump to %08x\n\n", _pc);
+									if (do_trace) trace("  => jump to %08x\n\n", _pc);
 								}
 							}
 							break;
@@ -691,11 +698,11 @@ public:
 						case 0x85:
 							{
 								uint32_t offset = getLongPC();
-								trace(" jne %d\n", _flags);
+								if (do_trace) trace(" jne %d\n", _flags);
 								if (_flags != 0)
 								{
 									_pc += offset;
-									trace("  => jump to %08x\n\n", _pc);
+									if (do_trace) trace("  => jump to %08x\n\n", _pc);
 								}
 							}
 							break;
@@ -703,11 +710,11 @@ public:
 						case 0x86:
 							{
 								uint32_t offset = getLongPC();
-								trace(" jbe %d\n", _flags);
+								if (do_trace) trace(" jbe %d\n", _flags);
 								if (_flags <= 0)
 								{
 									_pc += offset;
-									trace("  => jump to %08x\n\n", _pc);
+									if (do_trace) trace("  => jump to %08x\n\n", _pc);
 								}
 							}
 							break;
@@ -715,11 +722,11 @@ public:
 						case 0x8C:
 							{
 								uint32_t offset = getLongPC();
-								trace(" jl %d\n", _flags);
+								if (do_trace) trace(" jl %d\n", _flags);
 								if (_flags < 0)
 								{
 									_pc += offset;
-									trace("  => jump to %08x\n\n", _pc);
+									if (do_trace) trace("  => jump to %08x\n\n", _pc);
 								}
 							}
 							break;
@@ -727,11 +734,11 @@ public:
 						case 0x8F:
 							{
 								uint32_t offset = getLongPC();
-								trace(" jg %d\n", _flags);
+								if (do_trace) trace(" jg %d\n", _flags);
 								if (_flags > 0)
 								{
 									_pc += offset;
-									trace("  => jump to %08x\n\n", _pc);
+									if (do_trace) trace("  => jump to %08x\n\n", _pc);
 								}
 							}
 							break;
@@ -742,17 +749,17 @@ public:
 							{
 								case 0xC0:
 									_eax = _eax & 0xFF;
-									trace(" movzx _eax: %08x\n", _eax);
+									if (do_trace) trace(" movzx _eax: %08x\n", _eax);
 									break;
 									
 								case 0xC9:
 									_ecx = _ecx & 0xFF;
-									trace(" movzx _cl: %08x\n", _ecx);
+									if (do_trace) trace(" movzx _cl: %08x\n", _ecx);
 									break;
 									
 								case 0xDB:
 									_ebx = _ebx & 0xFF;
-									trace(" movzx _ebx: %08x\n", _ebx);
+									if (do_trace) trace(" movzx _ebx: %08x\n", _ebx);
 									break;
 									
 								default:
@@ -773,12 +780,12 @@ public:
 					{
 						case 0xD0:
 							_eax -= _edx;
-							trace(" sub_edx:%08x from eax: %08xc\n", _edx, _eax);
+							if (do_trace) trace(" sub_edx:%08x from eax: %08xc\n", _edx, _eax);
 							break;
 						
 						case 0xF8:
 							_eax -= _edi;
-							trace(" sub_edi:%08x from eax: %08xc\n", _edi, _eax);
+							if (do_trace) trace(" sub_edi:%08x from eax: %08xc\n", _edi, _eax);
 							break;
 						
 						default:
@@ -789,7 +796,7 @@ public:
 					
 				case 0x2C:
 					opcode = getPC();
-					trace(" sub_al, %d\n", opcode);
+					if (do_trace) trace(" sub_al, %d\n", opcode);
 					set_al((byte)(_eax & 0xFF) - opcode);
 					break;
 					 
@@ -799,32 +806,32 @@ public:
 					{
 						case 0xC0:
 							_eax = 0L;
-							trace(" xor_eax,eax\n");
+							if (do_trace) trace(" xor_eax,eax\n");
 							break;
 						
 						case 0xC9:
 							_ecx = 0L;
-							trace(" xor_ecx,ecx\n");
+							if (do_trace) trace(" xor_ecx,ecx\n");
 							break;
 						
 						case 0xD2:
 							_edx = 0L;
-							trace(" xor_edx,edx\n");
+							if (do_trace) trace(" xor_edx,edx\n");
 							break;
 
 						case 0xDB:
 							_ebx = 0L;
-							trace(" xor_ebx,ebx\n");
+							if (do_trace) trace(" xor_ebx,ebx\n");
 							break;
 
 						case 0xED:
 							_ebp = 0L;
-							trace(" xor_ebp,ebp\n");
+							if (do_trace) trace(" xor_ebp,ebp\n");
 							break;
 
 						case 0xFF:
 							_edi = 0L;
-							trace(" xor_edi,edi\n");
+							if (do_trace) trace(" xor_edi,edi\n");
 							break;
 
 						default:
@@ -839,7 +846,7 @@ public:
 					{
 						case 0xD8:
 							_flags = SIGNEXT(_eax & 0xFF) - SIGNEXT(_ebx & 0xFF);
-							trace(" cmp_al_bl %08x %08x %d\n", _eax, _ebx, _flags);
+							if (do_trace) trace(" cmp_al_bl %08x %08x %d\n", _eax, _ebx, _flags);
 							break;
 
 						default:
@@ -854,22 +861,22 @@ public:
 					{
 						case 0xC8:
 							_flags = _eax - _ecx;
-							trace(" cmp_eax,ecx\n");
+							if (do_trace) trace(" cmp_eax,ecx\n");
 							break;
 
 						case 0xCB:
 							_flags = _ebx - _ecx;
-							trace(" cmp_ebx,ecx\n");
+							if (do_trace) trace(" cmp_ebx,ecx\n");
 							break;
 
 						case 0xD8:
 							_flags = _eax - _ebx;
-							trace(" cmp_eax,ebx\n");
+							if (do_trace) trace(" cmp_eax,ebx\n");
 							break;
 
 						case 0xD9:
 							_flags = _ebx - _ecx;
-							trace(" cmp_ebx,ecx\n");
+							if (do_trace) trace(" cmp_ebx,ecx\n");
 							break;
 
 						default:
@@ -881,41 +888,41 @@ public:
 				case 0x3C:
 					opcode = getPC();
 					_flags = SIGNEXT(_eax & 0xFF) - SIGNEXT(opcode);
-					trace(" cmp_al, %d = %d\n", opcode, _flags);
+					if (do_trace) trace(" cmp_al, %d = %d\n", opcode, _flags);
 					break;
 					
 				case 0x3D:
 					{
 						uint32_t value = getLongPC();
 						_flags = _eax - value;
-						trace(" cmp_eax, %d = %d\n", value, _flags);
+						if (do_trace) trace(" cmp_eax, %d = %d\n", value, _flags);
 					}
 					break;
 					
 				case 0x4D:
 					_ebp--;
-					trace(" dec ebp: %08x\n", _ebp);
+					if (do_trace) trace(" dec ebp: %08x\n", _ebp);
 					break;
 					
-				case 0x50: _process->push(_eax); trace(" push_eax\n"); break;
-				case 0x51: _process->push(_ecx); trace(" push_ecx\n"); break;
-				case 0x52: _process->push(_edx); trace(" push_edx\n"); break;
-				case 0x53: _process->push(_ebx); trace(" push_ebx\n"); break;
-				case 0x56: _process->push(_esi); trace(" push_esi\n"); break;
-				case 0x57: _process->push(_edi); trace(" push_edi\n"); break;
+				case 0x50: _process->push(_eax); if (do_trace) trace(" push_eax\n"); break;
+				case 0x51: _process->push(_ecx); if (do_trace) trace(" push_ecx\n"); break;
+				case 0x52: _process->push(_edx); if (do_trace) trace(" push_edx\n"); break;
+				case 0x53: _process->push(_ebx); if (do_trace) trace(" push_ebx\n"); break;
+				case 0x56: _process->push(_esi); if (do_trace) trace(" push_esi\n"); break;
+				case 0x57: _process->push(_edi); if (do_trace) trace(" push_edi\n"); break;
 					
-				case 0x58: _eax = _process->pop(); trace(" pop_eax: %08x\n", _eax); break;
-				case 0x59: _ecx = _process->pop(); trace(" pop_ecx: %08x\n", _ecx); break;
-				case 0x5A: _edx = _process->pop(); trace(" pop_edx: %08x\n", _ebx); break;
-				case 0x5B: _ebx = _process->pop(); trace(" pop_ebx: %08x\n", _ebx); break;
-				case 0x5D: _ebp = _process->pop(); trace(" pop_ebp: %08x\n", _ebp); break;
-				case 0x5E: _esi = _process->pop(); trace(" pop_esi: %08x\n", _esi); break;
-				case 0x5F: _edi = _process->pop(); trace(" pop_edi: %08x\n", _edi); break;
+				case 0x58: _eax = _process->pop(); if (do_trace) trace(" pop_eax: %08x\n", _eax); break;
+				case 0x59: _ecx = _process->pop(); if (do_trace) trace(" pop_ecx: %08x\n", _ecx); break;
+				case 0x5A: _edx = _process->pop(); if (do_trace) trace(" pop_edx: %08x\n", _ebx); break;
+				case 0x5B: _ebx = _process->pop(); if (do_trace) trace(" pop_ebx: %08x\n", _ebx); break;
+				case 0x5D: _ebp = _process->pop(); if (do_trace) trace(" pop_ebp: %08x\n", _ebp); break;
+				case 0x5E: _esi = _process->pop(); if (do_trace) trace(" pop_esi: %08x\n", _esi); break;
+				case 0x5F: _edi = _process->pop(); if (do_trace) trace(" pop_edi: %08x\n", _edi); break;
 					
 				case 0x6A:
 					opcode = getPC();
 					_process->push(SIGNEXT(opcode));
-					trace(" push %02x\n", opcode);
+					if (do_trace) trace(" push %02x\n", opcode);
 					break;
 				
 				case 0x6B:
@@ -925,7 +932,7 @@ public:
 						case 0xC0:
 							opcode = getPC();
 							_eax *= SIGNEXT(opcode); // Or? set_cx(getShortPC());
-							trace(" imuli8 eax %02x: %08x\n", opcode, _eax);
+							if (do_trace) trace(" imuli8 eax %02x: %08x\n", opcode, _eax);
 							break;
 							
 						default:
@@ -954,51 +961,51 @@ public:
 				
 				case 0x74:
 					opcode = getPC();
-					trace(" je %02X %d\n", opcode, _flags);
+					if (do_trace) trace(" je %02X %d\n", opcode, _flags);
 					if (_flags == 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n\n", _pc);
+						if (do_trace) trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
 				case 0x75:
 					opcode = getPC();
-					trace(" jne %02X %d\n", opcode, _flags);
+					if (do_trace) trace(" jne %02X %d\n", opcode, _flags);
 					if (_flags != 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n\n", _pc);
+						if (do_trace) trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
 				case 0x7C:
 					opcode = getPC();
-					trace(" jl %02X  flags = %d\n", opcode, _flags);
+					if (do_trace) trace(" jl %02X  flags = %d\n", opcode, _flags);
 					if (_flags < 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n\n", _pc);
+						if (do_trace) trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
 				case 0x7D:
 					opcode = getPC();
-					trace(" jge %02X %d\n", opcode, _flags);
+					if (do_trace) trace(" jge %02X %d\n", opcode, _flags);
 					if (_flags >= 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n\n", _pc);
+						if (do_trace) trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
 				case 0x7E:
 					opcode = getPC();
-					trace(" jle %02X %d\n", opcode, _flags);
+					if (do_trace) trace(" jle %02X %d\n", opcode, _flags);
 					if (_flags <= 0)
 					{
 						_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-						trace("  => jump to %08x\n\n", _pc);
+						if (do_trace) trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 				
@@ -1010,7 +1017,7 @@ public:
 							{
 								uint32_t value = getLongPC();
 								_ebx += value;
-								trace(" add_ecx %08x: %08x\n", value, _ebx);
+								if (do_trace) trace(" add_ecx %08x: %08x\n", value, _ebx);
 							}
 							break;
 								
@@ -1027,97 +1034,97 @@ public:
 						case 0xC0:
 							opcode = getPC();
 							_eax += SIGNEXT(opcode);
-							trace(" add_eax %02x %08x\n", opcode, _eax);
+							if (do_trace) trace(" add_eax %02x %08x\n", opcode, _eax);
 							break;
 							
 						case 0xC1:
 							opcode = getPC();
 							_ecx += SIGNEXT(opcode);
-							trace(" add_ecx %02x %08x\n", opcode, _ecx);
+							if (do_trace) trace(" add_ecx %02x %08x\n", opcode, _ecx);
 							break;
 							
 						case 0xC2:
 							opcode = getPC();
 							_edx += SIGNEXT(opcode);
-							trace(" add_edx %02x %08x\n", opcode, _edx);
+							if (do_trace) trace(" add_edx %02x %08x\n", opcode, _edx);
 							break;
 						
 						case 0xC3:
 							opcode = getPC();
 							_ebx += SIGNEXT(opcode);
-							trace(" add_ebx %02x %08x\n", opcode, _ebx);
+							if (do_trace) trace(" add_ebx %02x %08x\n", opcode, _ebx);
 							break;
 						
 						case 0xC5:
 							opcode = getPC();
 							_ebp += SIGNEXT(opcode);
-							trace(" add_ebp %02x: %08x\n", opcode, _ebp);
+							if (do_trace) trace(" add_ebp %02x: %08x\n", opcode, _ebp);
 							break;
 						
 						case 0xC7:
 							opcode = getPC();
 							_edi += SIGNEXT(opcode);
-							trace(" add_edi %02x: %08x\n", opcode, _edi);
+							if (do_trace) trace(" add_edi %02x: %08x\n", opcode, _edi);
 							break;
 						
 						case 0xE0: // https://www.felixcloutier.com/x86/sub
 							opcode = getPC();
 							_eax = _eax & SIGNEXT(opcode);
-							trace(" sub _eax %02x: %08x\n", opcode, _eax);
+							if (do_trace) trace(" sub _eax %02x: %08x\n", opcode, _eax);
 							break;
 								
 						case 0xE8: // https://www.felixcloutier.com/x86/sub
 							opcode = getPC();
 							_eax -= SIGNEXT(opcode);
-							trace(" sub _eax %02x: %08x\n", opcode, _eax);
+							if (do_trace) trace(" sub _eax %02x: %08x\n", opcode, _eax);
 							break;
 								
 						case 0xE9: // https://www.felixcloutier.com/x86/sub
 							opcode = getPC();
 							_ecx -= SIGNEXT(opcode);
-							trace(" sub _eax %02x: %08x\n", opcode, _eax);
+							if (do_trace) trace(" sub _eax %02x: %08x\n", opcode, _eax);
 							break;
 								
 						case 0xF8: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
 							_flags = _eax - SIGNEXT(opcode);
-							trace(" cmp _eax %02x: %08x\n", opcode, _flags);
+							if (do_trace) trace(" cmp _eax %02x: %08x\n", opcode, _flags);
 							break;
 								
 						case 0xF9: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
 							_flags = _ecx - SIGNEXT(opcode);
-							trace(" cmp _ecx %02x: %08x\n", opcode, _flags);
+							if (do_trace) trace(" cmp _ecx %02x: %08x\n", opcode, _flags);
 							break;
 								
 						case 0xFA: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
 							_flags = _edx - SIGNEXT(opcode);
-							trace(" cmp _edx %02x: %08x\n", opcode, _flags);
+							if (do_trace) trace(" cmp _edx %02x: %08x\n", opcode, _flags);
 							break;
 
 						case 0xFB: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
 							_flags = _ebx - SIGNEXT(opcode);
-							trace(" cmp _ebx %02x: %08x\n", opcode, _flags);
+							if (do_trace) trace(" cmp _ebx %02x: %08x\n", opcode, _flags);
 							break;
 
 						case 0xFD: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
 							_flags = _ebp - SIGNEXT(opcode);
-							trace(" cmp _ebp %02x: %08x\n", opcode, _flags);
+							if (do_trace) trace(" cmp _ebp %02x: %08x\n", opcode, _flags);
 							break;
 								
 						case 0xFE: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
 							_flags = _esi - SIGNEXT(opcode);
-							trace(" cmp _esi %02x: %08x\n", opcode, _flags);
+							if (do_trace) trace(" cmp _esi %02x: %08x\n", opcode, _flags);
 							break;
 								
 						case 0xFF: // https://www.felixcloutier.com/x86/cmp
 							opcode = getPC();
 							_flags = _edi - SIGNEXT(opcode);
-							trace(" cmp _edi %02x: %08x\n", opcode, _flags);
+							if (do_trace) trace(" cmp _edi %02x: %08x\n", opcode, _flags);
 							break;
 								
 						default:
@@ -1132,17 +1139,17 @@ public:
 					{
 						case 0xC0:
 							_flags = (int32_t)_eax;
-							trace(" test_eax,eax %08x %d\n", _eax, _flags);
+							if (do_trace) trace(" test_eax,eax %08x %d\n", _eax, _flags);
 							break;
 							
 						case 0xDB:
 							_flags = (int32_t)_ebx;
-							trace(" test_ebx,ebx %08x %d\n", _ebx, _flags);
+							if (do_trace) trace(" test_ebx,ebx %08x %d\n", _ebx, _flags);
 							break;
 							
 						case 0xED:
 							_flags = (int32_t)_ebp;
-							trace(" test_ebp,ebp %08x %d\n", _ebp, _flags);
+							if (do_trace) trace(" test_ebp,ebp %08x %d\n", _ebp, _flags);
 							break;
 							
 						default:
@@ -1158,20 +1165,20 @@ public:
 						case 0x01:
 						{
 							_process->storeByte(_ecx, (byte)_eax);
-							trace(" mov_[ecx:%08x],al %02x\n", _ecx, (byte)_eax);
+							if (do_trace) trace(" mov_[ecx:%08x],al %02x\n", _ecx, (byte)_eax);
 						}
 						break;
 					
 						case 0x03:
 						{
 							_process->storeByte(_ebx, (byte)_eax);
-							trace(" mov_[ebx:%08x],al %02x\n", _ebx, (byte)_eax);
+							if (do_trace) trace(" mov_[ebx:%08x],al %02x\n", _ebx, (byte)_eax);
 						}
 						break;
 					
 						case 0x0A:
 						{
-							trace(" mov_[edx:%08x],cl %02x\n", _edx, (byte)_ecx);
+							if (do_trace) trace(" mov_[edx:%08x],cl %02x\n", _edx, (byte)_ecx);
 							_process->storeByte(_edx, (byte)_ecx);
 						}
 						break;
@@ -1188,118 +1195,118 @@ public:
 					{
 						case 0x01:
 							_process->storeDWord(_ecx, _eax);
-							trace(" mov_[ecx:%08x],eax %08x\n", _ecx, _eax);
+							if (do_trace) trace(" mov_[ecx:%08x],eax %08x\n", _ecx, _eax);
 							break;
 						
 						case 0x03:
 							_process->storeDWord(_ebx, _eax);
-							trace(" mov_[ebx:%08x],eax %08x\n", _ebx, _eax);
+							if (do_trace) trace(" mov_[ebx:%08x],eax %08x\n", _ebx, _eax);
 							break;
 						
 						case 0x0B:
 							_process->storeDWord(_ebx, _ecx);
-							trace(" mov_[ebx:%08x],ecx %08x\n", _ebx, _ecx);
+							if (do_trace) trace(" mov_[ebx:%08x],ecx %08x\n", _ebx, _ecx);
 							break;
 						
 						case 0x1D:
 							{
 								uint32_t addr = getLongPC();
 								_process->storeDWord(addr, _ebx);
-								trace(" mov_ebx: %08x to memory[%08x]\n", _ebx, addr);
+								if (do_trace) trace(" mov_ebx: %08x to memory[%08x]\n", _ebx, addr);
 							}
 							break;
 						
 						case 0x2A:
 							_process->storeDWord(_edx, _ebp);
-							trace(" mov_ebp: %08x to memory[edx:%08x]\n", _ebp, _edx);
+							if (do_trace) trace(" mov_ebp: %08x to memory[edx:%08x]\n", _ebp, _edx);
 							break;
 
 						case 0x30:
 							_process->storeDWord(_eax, _esi);
-							trace(" mov_esi: %08x to memory[eax:%08x]\n", _esi, _eax);
+							if (do_trace) trace(" mov_esi: %08x to memory[eax:%08x]\n", _esi, _eax);
 							break;
 						
 						case 0x38:
 							_process->storeDWord(_eax, _edi);
-							trace(" mov_edi: %08x to memory[eax:%08x]\n", _edi, _eax);
+							if (do_trace) trace(" mov_edi: %08x to memory[eax:%08x]\n", _edi, _eax);
 							break;
 						
 						case 0x41:
 							opcode = getPC();
 							_process->storeDWord(_ecx + opcode, _eax);
-							trace(" mov_eax: %08x to memory[ecx:%08x + %02x]\n", _eax, _ecx, opcode);
+							if (do_trace) trace(" mov_eax: %08x to memory[ecx:%08x + %02x]\n", _eax, _ecx, opcode);
 							break;
 						
 						case 0x42:
 							opcode = getPC();
 							_process->storeDWord(_edx + opcode, _eax);
-							trace(" mov_eax: %08x to memory[edx:%08x + %02x]\n", _eax, _edx, opcode);
+							if (do_trace) trace(" mov_eax: %08x to memory[edx:%08x + %02x]\n", _eax, _edx, opcode);
 							break;
 						
 						case 0x4A:
 							opcode = getPC();
 							_process->storeDWord(_edx + opcode, _ecx);
-							trace(" mov_ecx: %08x to memory[edx:%08x + %02x]\n", _ecx, _edx, opcode);
+							if (do_trace) trace(" mov_ecx: %08x to memory[edx:%08x + %02x]\n", _ecx, _edx, opcode);
 							break;
 						
 						case 0x58:
 							opcode = getPC();
 							_process->storeDWord(_eax + opcode, _ebx);
-							trace(" mov_ebx: %08x to memory[eax:%08x + %02x]\n", _ebx, _eax, opcode);
+							if (do_trace) trace(" mov_ebx: %08x to memory[eax:%08x + %02x]\n", _ebx, _eax, opcode);
 							break;
 						
 						case 0x59:
 							opcode = getPC();
 							_process->storeDWord(_ecx + opcode, _ebx);
-							trace(" mov_ebx: %08x to memory[ecx:%08x + %02x]\n", _ebx, _ecx, opcode);
+							if (do_trace) trace(" mov_ebx: %08x to memory[ecx:%08x + %02x]\n", _ebx, _ecx, opcode);
 							break;
 						
 						case 0x6E:
 							opcode = getPC();
 							_process->storeDWord(_esi + opcode, _ebp);
-							trace(" mov_ebp: %08x to memory[esi:%08x + %02x]\n", _ebp, _esi, opcode);
+							if (do_trace) trace(" mov_ebp: %08x to memory[esi:%08x + %02x]\n", _ebp, _esi, opcode);
 							break;
 						
 						case 0x78:
 							opcode = getPC();
 							_process->storeDWord(_eax + opcode, _edi);
-							trace(" mov_edi: %08x to memory[eax:%08x + %02x]\n", _edi, _eax, opcode);
+							if (do_trace) trace(" mov_edi: %08x to memory[eax:%08x + %02x]\n", _edi, _eax, opcode);
 							break;
 						
-						case 0xC1: _ecx = _eax; trace(" mov_ecx,eax = %08x\n", _ecx); break;
-						case 0xC2: _edx = _eax; trace(" mov_edx,eax = %08x\n", _edx); break;
-						case 0xC3: _ebx = _eax; trace(" mov_ebx,eax = %08x\n", _ebx); break;
-						case 0xC5: _ebp = _eax; trace(" mov_ebp,eax = %08x\n", _ebp); break;
-						case 0xC6: _esi = _eax; trace(" mov_esi,eax = %08x\n", _esi); break;
-						case 0xC7: _edi = _eax; trace(" mov_edi,eax = %08x\n", _edi); break;
+						case 0xC1: _ecx = _eax; if (do_trace) trace(" mov_ecx,eax = %08x\n", _ecx); break;
+						case 0xC2: _edx = _eax; if (do_trace) trace(" mov_edx,eax = %08x\n", _edx); break;
+						case 0xC3: _ebx = _eax; if (do_trace) trace(" mov_ebx,eax = %08x\n", _ebx); break;
+						case 0xC5: _ebp = _eax; if (do_trace) trace(" mov_ebp,eax = %08x\n", _ebp); break;
+						case 0xC6: _esi = _eax; if (do_trace) trace(" mov_esi,eax = %08x\n", _esi); break;
+						case 0xC7: _edi = _eax; if (do_trace) trace(" mov_edi,eax = %08x\n", _edi); break;
 						
-						case 0xC8: _eax = _ecx; trace(" mov_aex,ecx = %08x\n", _eax); break;
-						case 0xCB: _ebx = _ecx; trace(" mov_abx,ecx = %08x\n", _ebx); break;
+						case 0xC8: _eax = _ecx; if (do_trace) trace(" mov_aex,ecx = %08x\n", _eax); break;
+						case 0xCB: _ebx = _ecx; if (do_trace) trace(" mov_abx,ecx = %08x\n", _ebx); break;
 						
-						case 0xD0: _eax = _edx; trace(" mov_eax,edx = %08x\n", _eax); break;
-						case 0xD3: _ebx = _edx; trace(" mov_ebx,edx = %08x\n", _ebx); break;
-						case 0xD5: _ebp = _edx; trace(" mov_ebp,edx = %08x\n", _ebp); break;
+						case 0xD0: _eax = _edx; if (do_trace) trace(" mov_eax,edx = %08x\n", _eax); break;
+						case 0xD3: _ebx = _edx; if (do_trace) trace(" mov_ebx,edx = %08x\n", _ebx); break;
+						case 0xD5: _ebp = _edx; if (do_trace) trace(" mov_ebp,edx = %08x\n", _ebp); break;
 						
-						case 0xD8: _eax = _ebx; trace(" mov_eax,ebx = %08x\n", _eax); break;
-						case 0xD9: _ecx = _ebx; trace(" mov_ecx,ebx = %08x\n", _ecx); break;
-						case 0xDA: _edx = _ebx; trace(" mov_edx,ebx = %08x\n", _edx); break;
-						case 0xDD: _ebp = _ebx; trace(" mov_ebp,ebx = %08x\n", _ebp); break;
-						case 0xDF: _edi = _ebx; trace(" mov_edi,ebx = %08x\n", _edi); break;
+						case 0xD8: _eax = _ebx; if (do_trace) trace(" mov_eax,ebx = %08x\n", _eax); break;
+						case 0xD9: _ecx = _ebx; if (do_trace) trace(" mov_ecx,ebx = %08x\n", _ecx); break;
+						case 0xDA: _edx = _ebx; if (do_trace) trace(" mov_edx,ebx = %08x\n", _edx); break;
+						case 0xDD: _ebp = _ebx; if (do_trace) trace(" mov_ebp,ebx = %08x\n", _ebp); break;
+						case 0xDF: _edi = _ebx; if (do_trace) trace(" mov_edi,ebx = %08x\n", _edi); break;
 						
-						case 0xE1: _ecx = _process->sp; trace(" mov_ecx,esp = %08x\n", _ecx); break;
-						case 0xE5: _ebp = _process->sp; trace(" mov_ebp,esp = %08x\n", _ebp); break;
+						case 0xE1: _ecx = _process->sp; if (do_trace) trace(" mov_ecx,esp = %08x\n", _ecx); break;
+						case 0xE5: _ebp = _process->sp; if (do_trace) trace(" mov_ebp,esp = %08x\n", _ebp); break;
 						
-						case 0xE8: _eax = _ebp; trace(" mov_eax,ebp = %08x\n", _eax); break;
-						case 0xEA: _edx = _ebp; trace(" mov_edx,ebp = %08x\n", _edx); break;
-						case 0xEB: _ebx = _ebp; trace(" mov_ebx,ebp = %08x\n", _ebx); break;
+						case 0xE8: _eax = _ebp; if (do_trace) trace(" mov_eax,ebp = %08x\n", _eax); break;
+						case 0xEA: _edx = _ebp; if (do_trace) trace(" mov_edx,ebp = %08x\n", _edx); break;
+						case 0xEB: _ebx = _ebp; if (do_trace) trace(" mov_ebx,ebp = %08x\n", _ebx); break;
 						
-						case 0xF3: _ebx = _esi; trace(" mov_ebx,esi = %08x\n", _ebx); break;
+						case 0xF3: _ebx = _esi; if (do_trace) trace(" mov_ebx,esi = %08x\n", _ebx); break;
 						
-						case 0xF8: _eax = _edi; trace(" mov_eax,edi = %08x\n", _eax); break;
-						case 0xF9: _ecx = _edi; trace(" mov_ecx,edi = %08x\n", _ecx); break;
-						case 0xFA: _edx = _edi; trace(" mov_edx,edi = %08x\n", _edx); break;
-						case 0xFB: _flags = _ebx = _edi; trace(" text ebx,ebx %d\n", _flags); break;
-						//case 0xFB: _flags = _ebx; trace(" text ebx,ebx %d\n", _flags); break;
+						case 0xF8: _eax = _edi; if (do_trace) trace(" mov_eax,edi = %08x\n", _eax); break;
+						case 0xF9: _ecx = _edi; if (do_trace) trace(" mov_ecx,edi = %08x\n", _ecx); break;
+						case 0xFA: _edx = _edi; if (do_trace) trace(" mov_edx,edi = %08x\n", _edx); break;
+						case 0xFB: _flags = _ebx = _edi; if (do_trace) trace(" text ebx,ebx %d\n", _flags); break;
+						//case 0xFB: _flags = _ebx; if (do_trace) trace(" text ebx,ebx %d\n", _flags); break;
 							
 						default:
 							unknownOpcode();
@@ -1313,17 +1320,17 @@ public:
 					{
 						case 0x01:
 							set_al(_process->loadByte(_ecx));
-							trace(" mov_al,[ecx:%08x] %08x\n", _ecx, _eax);
+							if (do_trace) trace(" mov_al,[ecx:%08x] %08x\n", _ecx, _eax);
 							break; 
 							
 						case 0x02:
 							set_al(_process->loadByte(_edx));
-							trace(" mov_al,[edx:%08x] %08x\n", _edx, _eax);
+							if (do_trace) trace(" mov_al,[edx:%08x] %08x\n", _edx, _eax);
 							break; 
 							
 						case 0x03:
 							set_al(_process->loadByte(_ebx));
-							trace(" mov_al,[ebx:%08x] %08x\n", _ebx, _eax);
+							if (do_trace) trace(" mov_al,[ebx:%08x] %08x\n", _ebx, _eax);
 							break;
 							
 						case 0x04:
@@ -1332,7 +1339,7 @@ public:
 							{
 								case 0x0B:
 									set_al(_process->loadByte(_ebx + _ecx));
-									trace(" mov_al,[ebx:%08x + ecx:%08x] %08x\n", _ebx, _eax, _ecx);
+									if (do_trace) trace(" mov_al,[ebx:%08x + ecx:%08x] %08x\n", _ebx, _eax, _ecx);
 									break;
 								
 								default:
@@ -1343,28 +1350,28 @@ public:
 							
 						case 0x08:
 							set_cl(_process->loadByte(_eax));
-							trace(" mov_cl,[ebx:%08x] %08x\n", _eax, _ecx);
+							if (do_trace) trace(" mov_cl,[ebx:%08x] %08x\n", _eax, _ecx);
 							break; 
 							
 						case 0x0B:
 							set_cl(_process->loadByte(_ebx));
-							trace(" mov_cl,[ebx:%08x] %08x\n", _ebx, _ecx);
+							if (do_trace) trace(" mov_cl,[ebx:%08x] %08x\n", _ebx, _ecx);
 							break; 
 							
 						case 0x18:
 							set_bl(_process->loadByte(_eax));
-							trace(" mov_bl,[eax:%08x] %08x\n", _eax, _ebx);
+							if (do_trace) trace(" mov_bl,[eax:%08x] %08x\n", _eax, _ebx);
 							break; 
 							
 						case 0x1A:
 							set_bl(_process->loadByte(_edx));
-							trace(" mov_bl,[edx:%08x] %08x\n", _edx, _ebx);
+							if (do_trace) trace(" mov_bl,[edx:%08x] %08x\n", _edx, _ebx);
 							break; 
 							
 						case 0x4B:
 							opcode = getPC();
 							set_cl(_process->loadByte(_ebx + opcode));
-							trace(" mov_bl,[edx:%08x + %02x] %08x\n", _ebx, opcode, _ecx);
+							if (do_trace) trace(" mov_bl,[edx:%08x + %02x] %08x\n", _ebx, opcode, _ecx);
 							break; 
 							
 						default:
@@ -1379,104 +1386,104 @@ public:
 					{
 						case 0x00:
 							_eax = _process->loadDWord(_eax);
-							trace(" mov_eax,[eax] %08x\n", _eax);
+							if (do_trace) trace(" mov_eax,[eax] %08x\n", _eax);
 							break; 
 						
 						case 0x01:
 							_eax = _process->loadDWord(_ecx);
-							trace(" mov_eax,[ebx:%08x] %08x\n", _ecx, _eax);
+							if (do_trace) trace(" mov_eax,[ebx:%08x] %08x\n", _ecx, _eax);
 							break; 
 						
 						case 0x03:
 							_eax = _process->loadDWord(_ebx);
-							trace(" mov_eax,[ebx:%08x] %08x\n", _ebx, _eax);
+							if (do_trace) trace(" mov_eax,[ebx:%08x] %08x\n", _ebx, _eax);
 							break; 
 						
 						case 0x09:
 							_ecx = _process->loadDWord(_ecx);
-							trace(" mov_eax,[ecx] %08x\n", _ecx);
+							if (do_trace) trace(" mov_eax,[ecx] %08x\n", _ecx);
 							break; 
 						
 						case 0x0B:
 							_ecx = _process->loadDWord(_ebx);
-							trace(" mov_ecx,[ebx:%08x] %08x\n", _ebx, _ecx);
+							if (do_trace) trace(" mov_ecx,[ebx:%08x] %08x\n", _ebx, _ecx);
 							break; 
 
 						case 0x12:
 							_edx = _process->loadDWord(_edx);
-							trace(" mov_edx,[edx] %08x\n", _edx);
+							if (do_trace) trace(" mov_edx,[edx] %08x\n", _edx);
 							break; 
 						
 						case 0x1B:
 							_ebx = _process->loadDWord(_ebx);
-							trace(" mov_ebs,[ebx] %08x\n", _ebx);
+							if (do_trace) trace(" mov_ebs,[ebx] %08x\n", _ebx);
 						break;
 					
 						case 0x1D:
 						{
 							uint32_t addr = getLongPC();
 							_ebx = _process->loadDWord(addr);
-							trace(" mov_ebx: %08x from memory[%08x]\n", _ebx, addr);
+							if (do_trace) trace(" mov_ebx: %08x from memory[%08x]\n", _ebx, addr);
 						}
 						break;
 							
 						case 0x36:
 							_esi = _process->loadDWord(_esi);
-							trace(" mov_esi,[esi] %08x\n", _esi);
+							if (do_trace) trace(" mov_esi,[esi] %08x\n", _esi);
 							break; 
 
 						case 0x40:
 							opcode = getPC();
 							_eax = _process->loadDWord(_eax + opcode);
-							trace(" mov_eax: %08x from memory[eax + %02x]\n", _eax, opcode);
+							if (do_trace) trace(" mov_eax: %08x from memory[eax + %02x]\n", _eax, opcode);
 							break;
 							
 						case 0x41:
 							opcode = getPC();
 							_eax = _process->loadDWord(_ecx + opcode);
-							trace(" mov_eax: %08x from memory[ecx:%08x + %02x]\n", _eax, _ecx, opcode);
+							if (do_trace) trace(" mov_eax: %08x from memory[ecx:%08x + %02x]\n", _eax, _ecx, opcode);
 							break;
 							
 						case 0x42:
 							opcode = getPC();
 							_eax = _process->loadDWord(_edx + opcode);
-							trace(" mov_eax: %08x from memory[edx:%08x + %02x]\n", _eax, _edx, opcode);
+							if (do_trace) trace(" mov_eax: %08x from memory[edx:%08x + %02x]\n", _eax, _edx, opcode);
 							break;
 							
 						case 0x43:
 							opcode = getPC();
 							_eax = _process->loadDWord(_ebx + opcode);
-							trace(" mov_eax: %08x from memory[ebx:%08x + %02x]\n", _eax, _ebx, opcode);
+							if (do_trace) trace(" mov_eax: %08x from memory[ebx:%08x + %02x]\n", _eax, _ebx, opcode);
 							break;
 							
 						case 0x46:
 							opcode = getPC();
 							_eax = _process->loadDWord(_esi + opcode);
-							trace(" mov_eax: %08x from memory[%08x + %02x]\n", _eax, _esi, opcode);
+							if (do_trace) trace(" mov_eax: %08x from memory[%08x + %02x]\n", _eax, _esi, opcode);
 							break;
 							
 						case 0x48:
 							opcode = getPC();
 							_ecx = _process->loadDWord(_eax + opcode);
-							trace(" mov_ecx: %08x from memory[%08x + %02x]\n", _ecx, _eax, opcode);
+							if (do_trace) trace(" mov_ecx: %08x from memory[%08x + %02x]\n", _ecx, _eax, opcode);
 							break;
 							
 						case 0x56:
 							opcode = getPC();
 							_edx = _process->loadDWord(_esi + opcode);
-							trace(" mov_edx: %08x from memory[%08x + %02x]\n", _edx, _esi, opcode);
+							if (do_trace) trace(" mov_edx: %08x from memory[%08x + %02x]\n", _edx, _esi, opcode);
 							break;
 							
 						case 0x58:
 							opcode = getPC();
 							_ebx = _process->loadDWord(_eax + opcode);
-							trace(" mov_ebx: %08x from memory[%08x + %02x]\n", _ebx, _eax, opcode);
+							if (do_trace) trace(" mov_ebx: %08x from memory[%08x + %02x]\n", _ebx, _eax, opcode);
 							break;
 							
 						case 0x59:
 							opcode = getPC();
 							_ebx = _process->loadDWord(_ecx + opcode);
-							trace(" mov_ebx: %08x from memory[%08x + %02x]\n", _ebx, _ecx, opcode);
+							if (do_trace) trace(" mov_ebx: %08x from memory[%08x + %02x]\n", _ebx, _ecx, opcode);
 							break;
 							
 						default:
@@ -1495,7 +1502,7 @@ public:
 							{
 								case 0x24:
 									_ecx = _process->sp;
-									trace(" lea_ecx,[esp] %08x\n", _ecx);
+									if (do_trace) trace(" lea_ecx,[esp] %08x\n", _ecx);
 									break;
 									
 								default:
@@ -1513,19 +1520,19 @@ public:
 				case 0x93:
 					{
 						uint32_t temp = _eax; _eax = _ebx; _ebx = temp;
-						trace(" xchg eax ebx: %08x %08x\n", _eax, _ebx);
+						if (do_trace) trace(" xchg eax ebx: %08x %08x\n", _eax, _ebx);
 					}
 					break;
 					
-				case 0x9C: _process->push(_flags); trace(" push_flags\n"); break;
+				case 0x9C: _process->push(_flags); if (do_trace) trace(" push_flags\n"); break;
 				
-				case 0x9D: _flags = _process->pop(); trace(" pop_flags: %d\n", _flags); break;
+				case 0x9D: _flags = _process->pop(); if (do_trace) trace(" pop_flags: %d\n", _flags); break;
 
 				case 0xA0:
 					{
 						uint32_t addr = getLongPC();
 						set_al(_process->loadByte(addr));
-						trace(" mov_al: %08x from memory[%08x]\n", _eax, addr);
+						if (do_trace) trace(" mov_al: %08x from memory[%08x]\n", _eax, addr);
 					}
 					break;
 						
@@ -1533,7 +1540,7 @@ public:
 					{
 						uint32_t addr = getLongPC();
 						_eax = _process->loadDWord(addr);
-						trace(" mov_eax: %08x from memory[%08x]\n", _eax, addr);
+						if (do_trace) trace(" mov_eax: %08x from memory[%08x]\n", _eax, addr);
 					}
 					break;
 						
@@ -1541,7 +1548,7 @@ public:
 					{
 						uint32_t addr = getLongPC();
 						_process->storeByte(addr, _eax & 0xFF);
-						trace(" mov_al: %02x to memory[%08x]\n", _eax & 0xFF, addr);
+						if (do_trace) trace(" mov_al: %02x to memory[%08x]\n", _eax & 0xFF, addr);
 					}
 					break;
 						
@@ -1549,17 +1556,17 @@ public:
 					{
 						uint32_t addr = getLongPC();
 						_process->storeDWord(addr, _eax);
-						trace(" mov_eax: %08x to memory[%08x]\n", _eax, addr);
+						if (do_trace) trace(" mov_eax: %08x to memory[%08x]\n", _eax, addr);
 					}
 					break;
 				
-				case 0xB8: _eax = getLongPC(); trace(" mov_eax, %08x\n", _eax); break;
-				case 0xB9: _ecx = getLongPC(); trace(" mov_ecx, %08x\n", _ecx); break;
-				case 0xBA: _edx = getLongPC(); trace(" mov_edx, %08x\n", _edx); break;
-				case 0xBB: _ebx = getLongPC(); trace(" mov_ebx, %08x\n", _ebx); break;
-				case 0xBD: _ebp = getLongPC(); trace(" mov_ebp, %08x\n", _ebp); break;
-				case 0xBE: _esi = getLongPC(); trace(" mov_esi, %08x\n", _esi); break;
-				case 0xBF: _edi = getLongPC(); trace(" mov_edi, %08x\n", _edi); break;
+				case 0xB8: _eax = getLongPC(); if (do_trace) trace(" mov_eax, %08x\n", _eax); break;
+				case 0xB9: _ecx = getLongPC(); if (do_trace) trace(" mov_ecx, %08x\n", _ecx); break;
+				case 0xBA: _edx = getLongPC(); if (do_trace) trace(" mov_edx, %08x\n", _edx); break;
+				case 0xBB: _ebx = getLongPC(); if (do_trace) trace(" mov_ebx, %08x\n", _ebx); break;
+				case 0xBD: _ebp = getLongPC(); if (do_trace) trace(" mov_ebp, %08x\n", _ebp); break;
+				case 0xBE: _esi = getLongPC(); if (do_trace) trace(" mov_esi, %08x\n", _esi); break;
+				case 0xBF: _edi = getLongPC(); if (do_trace) trace(" mov_edi, %08x\n", _edi); break;
 
 				case 0xC1:
 					opcode = getPC();
@@ -1568,25 +1575,25 @@ public:
 						case 0xE0:
 							opcode = getPC();
 							_eax = _eax << opcode;
-							trace(" shl_eax, %d %08x\n", opcode, _eax);
+							if (do_trace) trace(" shl_eax, %d %08x\n", opcode, _eax);
 							break;
 							
 						case 0xE6:
 							opcode = getPC();
 							_esi = _esi << opcode;
-							trace(" shl_esi, %d %08x\n", opcode, _esi);
+							if (do_trace) trace(" shl_esi, %d %08x\n", opcode, _esi);
 							break;
 							
 						case 0xE7:
 							opcode = getPC();
 							_edi = _edi << opcode;
-							trace(" shl_edi, %d %08x\n", opcode, _edi);
+							if (do_trace) trace(" shl_edi, %d %08x\n", opcode, _edi);
 							break;
 							
 						case 0xE8:
 							opcode = getPC();
 							_eax = _eax >> opcode;
-							trace(" shr_eax, %d %08x\n", opcode, _eax);
+							if (do_trace) trace(" shr_eax, %d %08x\n", opcode, _eax);
 							break;
 							
 						default:
@@ -1597,7 +1604,7 @@ public:
 					
 				case 0xC3:
 					_pc = _process->pop();
-					trace(" ret to %02x\n\n", _pc);
+					if (do_trace) trace(" ret to %02x\n\n", _pc);
 					indent_depth -= 2;
 					if (out_trace && --nr_ret == 0)
 						out_trace = false;
@@ -1605,7 +1612,7 @@ public:
 					
 				case 0xCD:
 					opcode = getPC();
-					trace(" int %02x\n", opcode);
+					if (do_trace) trace(" int %02x\n", opcode);
 					switch (opcode)
 					{
 						case 0x80:
@@ -1685,7 +1692,7 @@ public:
 						int32_t offset = (int32_t)getLongPC();
 						_process->push(_pc);
 						_pc += offset;
-						trace(" call %08x\n\n", _pc);
+						if (do_trace) trace(" call %08x\n\n", _pc);
 						indent_depth += 2;
 					}
 					break;
@@ -1694,16 +1701,16 @@ public:
 					{
 						int32_t offset = (int32_t)getLongPC();
 						_pc += offset;
-						trace(" jmp %08x\n", _pc);
-						trace("  => jump to %08x\n\n", _pc);
+						if (do_trace) trace(" jmp %08x\n", _pc);
+						if (do_trace) trace("  => jump to %08x\n\n", _pc);
 					}
 					break;
 					
 				case 0xEB:
 					opcode = getPC();
-					trace(" jmp\n");
+					if (do_trace) trace(" jmp\n");
 					_pc = _pc + opcode - (opcode >= 0x80 ? 0x100 : 0);
-					trace("  => jump to %08x\n\n", _pc);
+					if (do_trace) trace("  => jump to %08x\n\n", _pc);
 					break;
 
 				case 0xF7:
@@ -1712,12 +1719,12 @@ public:
 					{
 						case 0xD0:
 							_eax = ~_eax;
-							trace(" bitwnot ebp\n", opcode, _eax);
+							if (do_trace) trace(" bitwnot ebp\n", opcode, _eax);
 							break;
 							
 						case 0xD5:
 							_ebp = ~_ebp;
-							trace(" bitwnot ebp\n", opcode, _ebp);
+							if (do_trace) trace(" bitwnot ebp\n", opcode, _ebp);
 							break;
 							
 						default:
@@ -1796,22 +1803,25 @@ public:
 			if (r == -1)
 			{
 				_eax = -4; // EOF
-				trace(" read errno\n");
+				if (do_trace) trace(" read errno\n");
 				return;
 			}
 			if (r == 0)
 				break;
 			_process->storeByte(_ecx + i, buffer);
-			if (buffer >= ' ' && buffer < 127)
-				trace(" read %02x: %c to %08x\n", buffer, buffer, _ecx + i);
-			else
-				trace(" read %02x to %08x\n", buffer, _ecx + i);
+			if (do_trace)
+			{
+				if (buffer >= ' ' && buffer < 127)
+				 	trace(" read %02x: %c to %08x\n", buffer, buffer, _ecx + i);
+				else
+					trace(" read %02x to %08x\n", buffer, _ecx + i);
+			}
 			//if (_process->nr == 8 && buffer == '&')
 			//	out_trace = true;
 		}
 		if (i == 0)
 			_eax = -4; // EOF
-		trace(" read %d bytes\n", i);
+		if (do_trace) trace(" read %d bytes\n", i);
 		_eax = i;
 	}		
 
@@ -1821,19 +1831,22 @@ public:
 		for (; i < _edx; i++)
 		{
 			byte buffer = _process->loadByte(_ecx + i);
-			if (buffer > ' ' && buffer < 127)
-				trace(" write %02x: %c from %08x\n", buffer, buffer, _ecx + i);
-			else
-				trace(" write %02x from %08x\n", buffer, _ecx + i);
+			if (do_trace)
+			{
+				if (buffer > ' ' && buffer < 127)
+					trace(" write %02x: %c from %08x\n", buffer, buffer, _ecx + i);
+				else
+					trace(" write %02x from %08x\n", buffer, _ecx + i);
+			}
 			int r = write(_ebx, &buffer, 1);
 			if (r == -1)
 			{
 				_eax = errno;
-				trace(" write errno %d\n", _eax);
+				if (do_trace) trace(" write errno %d\n", _eax);
 				return;
 			}
 		}
-		trace(" wrote %d bytes\n", i);
+		if (do_trace) trace(" wrote %d bytes\n", i);
 		_eax = i;
 	}
 	
@@ -1919,32 +1932,32 @@ public:
 		_process->init(argc, argv, env);
 		_pc = _process->pc;
 		printf("Start running process %d\n", _process->nr);
-		//if (_process->nr == 13)
-		//	out_trace = true;
+		if (_process->nr == 15)
+			do_trace = true;
 		
 		return true;
 	}
 	
 	void int_lseek()
 	{
-		trace(" lseek\n");
+		if (do_trace) trace(" lseek\n");
 		_eax = lseek(_ebx, _ecx, _edx);
 	}
 	
 	void int_sys_brk()
 	{
-		trace(" sys_brk %08x:", _ebx);
+		if (do_trace) trace(" sys_brk %08x:", _ebx);
 		if (_ebx < _process->end_code)
 		{
-			trace(" init on");
+			if (do_trace) trace(" init on");
 		}
 		else
 		{
 			if (_process->increase_brk(_ebx))
-				trace(" extend to");
+				if (do_trace) trace(" extend to");
 		}
 		_eax = _process->brk;
-		trace(" %08x\n", _eax);
+		if (do_trace) trace(" %08x\n", _eax);
 	}
 	
 	void unknownOpcode()
@@ -1957,7 +1970,7 @@ private:
 	byte getPC()
 	{
 		byte v = _process->loadByte(_pc);
-		//trace("pc = %08x %02x\n", _pc, v);
+		//if (do_trace) trace("pc = %08x %02x\n", _pc, v);
 		trace_ni("%02x ", v);
 		_pc++;
 		return v;
@@ -1975,11 +1988,11 @@ private:
 		return val;
 	}
 	
-	void set_al(byte val) { _eax = (_eax & 0xffffff00L) | (uint32_t)val; trace(" eax = %08x\n", _eax); } 
-	void set_bl(byte val) { _ebx = (_ebx & 0xffffff00L) | (uint32_t)val; trace(" ebx = %08x\n", _ebx); } 
-	void set_cl(byte val) { _ecx = (_ecx & 0xffffff00L) | (uint32_t)val; trace(" ecx = %08x\n", _ecx); } 
-	void set_cx(unsigned short val) { _ecx = (_ecx & 0xffff0000L) | (uint32_t)val; trace(" ecx = %08x\n", _ecx); } 
-	void set_dx(unsigned short val) { _edx = (_edx & 0xffff0000L) | (uint32_t)val; trace(" edx = %08x\n", _edx);} 
+	void set_al(byte val) { _eax = (_eax & 0xffffff00L) | (uint32_t)val; if (do_trace) trace(" eax = %08x\n", _eax); } 
+	void set_bl(byte val) { _ebx = (_ebx & 0xffffff00L) | (uint32_t)val; if (do_trace) trace(" ebx = %08x\n", _ebx); } 
+	void set_cl(byte val) { _ecx = (_ecx & 0xffffff00L) | (uint32_t)val; if (do_trace) trace(" ecx = %08x\n", _ecx); } 
+	void set_cx(unsigned short val) { _ecx = (_ecx & 0xffff0000L) | (uint32_t)val; if (do_trace) trace(" ecx = %08x\n", _ecx); } 
+	void set_dx(unsigned short val) { _edx = (_edx & 0xffff0000L) | (uint32_t)val; if (do_trace) trace(" edx = %08x\n", _edx);} 
 
 	Process *_process;
 	uint32_t _pc;
