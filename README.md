@@ -55,3 +55,14 @@ in the emulator. Again, I spend substantial time debugging, looking at output
 and comparing it with the input files. It cannot be excluded that there are still
 bugs in the current Emulator that have resulted in an incorrect working `hex2-0`
 program.
+
+## Fixing problems
+
+With commit [9e7eda25](https://github.com/FransFaase/Emulator/commit/9e7eda2556d4d0777943cde7b1cef785ca912ccb)
+(and some before), I fixed some problems related to processes effecting each other.
+I was not aware that the brk interupt did zero memory and I also did not take care
+that the registers where saved properly when switching between processes. The kaem
+command line interpreter stores the environment into register, which got corrupted.
+It now works until the execution of `cc_x86`, which makes use of some instructions not
+yet supported by the emulator.
+
