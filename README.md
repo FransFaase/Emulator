@@ -66,3 +66,11 @@ command line interpreter stores the environment into register, which got corrupt
 It now works until the execution of `cc_x86`, which makes use of some instructions not
 yet supported by the emulator.
 
+## cc_x86
+
+In commit [00c51a9d](https://github.com/FransFaase/Emulator/commit/00c51a9de355e09f77474ec6f59f4b2007d37c0c),
+I added all the additional instructions that were mentioned in [`cc_x86.M1`](https://github.com/oriansj/stage0-posix-x86/blob/991f9b91b1b99bbb613a87cac619ba32b9555e88/cc_x86.M1). I also had to fix some bug related to the indent getting larger than the
+message length of the trace functions. Now it seems to compile `cc_x86` correctly and
+it also seems to process `M2-0.c` correctly. But the resulting `M2` program contains
+some instructions that are not supported yet. These are mentioned in
+[`x86_defs.M1`](https://github.com/oriansj/stage0-posix-x86/blob/991f9b91b1b99bbb613a87cac619ba32b9555e88/x86_defs.M1).
