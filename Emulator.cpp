@@ -91,24 +91,82 @@ void print_trace(FILE *f)
 
 typedef unsigned char byte;
 
+bool do_gen = false;
+
+struct FunctionCall
+{
+	uint32_t addr;
+	FunctionCall *next;
+	
+	FunctionCall(uint32_t a, FunctionCall *n) : addr(a), next(n) {}
+};
+
+
 struct Statement
 {
+	int function_enter;
+	int label_pos;
+	bool is_loop;
 	char kind;
 	const char *code;
 	uint32_t val32;
 	uint16_t val16;
 	byte val8;
+	FunctionCall *func_calls;
 	
+	Statement()
+	{
+		function_enter = 0;
+		label_pos = 0;
+		is_loop = false;
+		code = 0;
+		val32 = 0;
+		val16 = 0;
+		val8 = 0;
+		func_calls = 0;
+	}
+
 	void call(uint32_t addr)
 	{
 		kind = 'c';
-		val32 = addr;
-	} 
+		for (FunctionCall *func_call = func_calls; func_call != 0; func_call = func_call->next)
+			if (func_call->addr == addr)
+				return;
+		func_calls = new FunctionCall(addr, func_calls);
+	}
 };
+
 Statement dummy;
 
 Statement *cur_stat = &dummy;
 
+uint32_t start_code;
+uint32_t start_pc;
+uint32_t end_code;
+Statement **statements = 0;
+
+void init_statements(uint32_t start, uint32_t end)
+{
+	do_gen = true;
+	start_code = start;
+	end_code = end;
+	statements = (Statement**)malloc((end_code - start_code) * sizeof(Statement*));
+	for (uint32_t i = 0; i < end_code - start_code; i++)
+		statements[i] = 0;
+}
+
+void start_inst(uint32_t pc)
+{
+	if (statements != 0 && start_code <= pc && pc < end_code)
+	{
+		uint32_t offset = pc - start_code;
+		if (statements[offset] == 0)
+			statements[offset] = new Statement;
+		cur_stat = statements[offset];
+	}
+}
+
+#define START_INST(X) start_inst(X)
 #define CODE(X) \
 	cur_stat->kind = 's'; \
 	cur_stat->code = #X; \
@@ -138,7 +196,7 @@ Statement *cur_stat = &dummy;
 	}
 #define CODE_CALL(X) cur_stat->call(X)
 #define CODE_RETURN cur_stat->kind = 'r'
-#define CODE_INT(X) cur_stat->kind = 'i'; cur_stat->val8 = X
+#define CODE_INT cur_stat->kind = 'i'; cur_stat->val32 = _eax
 
 class Process;
 class Usage;
@@ -199,6 +257,7 @@ public:
 	
 	uint32_t pc;
 	uint32_t sp;
+	uint32_t start_code;
 	uint32_t end_code;
 	uint32_t brk;
 	Process *parent;
@@ -225,7 +284,7 @@ public:
 		
 		for (int i = 0; i < 256; i++)
 			memory[i] = 0;
-		sp = 0xFFFFFFFFL;
+		sp = 0L;
 		if (parent != 0)
 		{
 			pc = parent->pc;
@@ -355,7 +414,7 @@ public:
 	
 	uint32_t pop()
 	{
-		if (sp == 0xFFFFFFFFL)
+		if (sp == 0L)
 		{
 			fprintf(stderr, "Stack underflow\n");
 			exit(-1);
@@ -382,6 +441,255 @@ public:
 		return true;
 	}
 };
+
+class FunctionName
+{
+public:
+	uint32_t addr;
+	char name[50];
+	FunctionName *next;
+	FunctionName(uint32_t a, char *n, FunctionName *nn)
+	{
+		addr = a;
+		strcpy(name, n);
+		next = nn;
+	}
+};
+FunctionName *functionNames = 0;
+
+void read_function_names()
+{
+	FILE *ffn = fopen("functions.txt", "r");
+	if (ffn != 0)
+	{
+		char buffer[100];
+		while (fgets(buffer, 100, ffn))
+		{
+			uint32_t a;
+			sscanf(buffer, "%x", &a);
+			char *s = buffer;
+			while (*s != ' ' && *s != '\0')
+				s++;
+			while (*s == ' ')
+				s++;
+			int len = strlen(s);
+			while (len > 0 && s[len-1] < ' ')
+				len--;
+			s[len] = '\0';
+			printf("%08x %s\n", a, s);
+			functionNames = new FunctionName(a, s, functionNames);  
+		}
+		fclose(ffn);
+	}
+}
+
+char *name_for_function(uint32_t addr, int function_enter)
+{
+	printf("name for function %08x %d\n", addr, function_enter);
+	for (FunctionName *fn = functionNames; fn != 0; fn = fn->next)
+		if (fn->addr == addr)
+			return fn->name;
+	static char buffer[100];
+	sprintf(buffer, "func%d", function_enter);
+	return buffer;
+}
+
+
+void generate_code(Process *process)
+{
+	read_function_names();
+	
+	int func_nr = 1;
+	int label_nr = 1;
+	uint32_t len = end_code - start_code;
+	uint32_t index = start_pc - start_code;
+	if (index < len && statements[index] != 0)
+		statements[index]->function_enter = func_nr++; 
+	for (uint32_t i = 0; i < end_code - start_code; i++)
+	{
+		Statement *stat = statements[i];
+		if (stat != 0)
+		{
+			if (stat->kind == 'j' && stat->val32 != 0)
+			{
+				uint32_t index = stat->val32 - start_code;
+				if (index < end_code && statements[index] != 0)
+				{
+					if (statements[index]->label_pos == 0)
+						statements[index]->label_pos = label_nr++;
+					if (index < i)
+						statements[index]->is_loop = true;
+				}
+			}
+			for (FunctionCall *func_call = stat->func_calls; func_call != 0; func_call = func_call->next)
+			{
+				uint32_t index = func_call->addr - start_code;
+				if (index < end_code && statements[index] != 0)
+					statements[index]->function_enter = -1;
+			}
+		}
+	}
+	for (uint32_t i = 0; i < end_code - start_code; i++)
+	{
+		Statement *stat = statements[i];
+		if (stat != 0 && stat->function_enter == -1)
+			stat->function_enter = func_nr++;
+	}
+	FILE *fout = fopen("program.cpp", "w");
+	fprintf(fout, "#define INCLUDED\n");
+	fprintf(fout, "#include \"Emulator.cpp\"\n");
+	fprintf(fout, "#include \"program.h\"\n");
+	fprintf(fout, "\n");
+	fprintf(fout, "class MyProcessor : public Processor\n");
+	fprintf(fout, "{\n");
+	fprintf(fout, "  int indent;");
+	fprintf(fout, "public:\n");
+	fprintf(fout, "\tMyProcessor(Process *proc) : Processor(proc), indent(0) {}\n");
+	fprintf(fout, "\n");
+	
+
+	bool in_func = false;
+	for (uint32_t i = 0; i < len; i++)
+	{
+		Statement *stat = statements[i];
+		if (stat != 0)
+		{
+			if (stat->function_enter > 0)
+			{
+				if (in_func)
+					fprintf(fout, "\t}\n\n");
+				fprintf(fout, "\tvoid %s()\n\t{\n", name_for_function(start_code + i, stat->function_enter));
+				fprintf(fout, "\t\tindent += 2; printf(\"%%*.*s%s\\n\", indent, indent, \"\");\n", name_for_function(start_code + i, stat->function_enter));
+				in_func = true;
+			}
+			if (stat->label_pos > 0)
+			{
+				fprintf(fout, "\tlabel%d: _print_label(%d);%s\n", stat->label_pos, stat->label_pos, stat->is_loop ? " // loop" : "");
+			}
+			fprintf(fout, "\t/* %08x %c */ ", start_code + i, stat->kind);
+			if (stat->kind == 'j')
+			{
+				uint32_t index = stat->val32 - start_code;
+				if (index >= len || statements[index] == 0)
+					fprintf(fout, "if (%s) { /* Jump is never taken. ERROR %08x %08x */ }", stat->code, stat->val32, index);
+				else
+					fprintf(fout, "if (%s) goto label%d;", stat->code, statements[index]->label_pos);
+			}
+			else if (stat->kind == 'c')
+			{
+				if (stat->func_calls != 0 && stat->func_calls->next == 0)
+				{
+					uint32_t index = stat->func_calls->addr - start_code;
+					if (index >= len || statements[index] == 0)
+						fprintf(fout, "/* Jump ERROR %08x %08x */", stat->val32, index);
+					else
+						fprintf(fout, "%s;\t\t\t\t\t%s();", stat->code, name_for_function(stat->func_calls->addr, statements[index]->function_enter));
+				}
+				else
+					fprintf(fout, "/* ERROR call */");
+				
+			}
+			else if (stat->kind == 'i')
+			{
+				switch (stat->val32)
+				{
+					case 0x01: fprintf(fout, "if (!int_exit()) exit(1);"); break;
+					case 0x02: fprintf(fout, "int_fork();"); break;
+					case 0x03: fprintf(fout, "int_read();"); break;
+					case 0x04: fprintf(fout, "int_write();"); break;
+					case 0x05: fprintf(fout, "int_open_file();"); break;
+					case 0x06: fprintf(fout, "int_close_file();"); break;
+					case 0x07: fprintf(fout, "int_wait_pid();"); break;
+					case 0x0B: fprintf(fout, "if (!int_execve()) exit(1);"); break;
+					case 0x13: fprintf(fout, "int_lseek();"); break;
+					case 0x2D: fprintf(fout, "int_sys_brk();"); break;
+					default:   fprintf(fout, "if (!int80()) exit(1);"); break;
+				}
+			}
+			else if (stat->kind == 'r')
+			{
+				fprintf(fout, "%s; _print_return(); indent -= 2; return;", stat->code);
+			}
+			else
+			{
+				if (stat->kind == 'b')
+					fprintf(fout, "val8 = 0x%02x; ", stat->val8);
+				else if (stat->kind == 'w')
+					fprintf(fout, "val16 = 0x%04x; ", stat->val16);
+				else if (stat->kind == 'l')
+				{
+					fprintf(fout, "val32 = 0x%08x; ", stat->val32);
+					if (start_code <= stat->val32 && stat->val32 < end_code)
+					{
+						uint32_t p = stat->val32;
+						bool is_string = true;
+						for(; p < end_code; p++)
+						{
+							byte ch = process->loadByte(p);
+							if (ch == '\0')
+								break;
+							if (ch != '\n' && ch != '\t' && (ch < ' ' || ch > 127))
+							{
+								is_string = false;
+								break;
+							}
+						}
+						if (is_string && p > stat->val32)
+						{
+							fprintf(fout, "/* \"");
+							for (uint32_t i = stat->val32; i < p; i++)
+							{
+								byte ch = process->loadByte(i);
+								if (ch == '\n')
+									fprintf(fout, "\\n");
+								else if (ch == '\t')
+									fprintf(fout, "\\t");
+								else
+									fprintf(fout, "%c", ch);
+							}
+							fprintf(fout, "\" */ ");
+						}
+					}
+				}
+				if (stat->code != 0)
+					fprintf(fout, "%s;", stat->code);
+			}
+			fprintf(fout, "\n");
+		}
+	}
+	if (in_func)
+		fprintf(fout, "\t}\n");
+	fprintf(fout, "private:\n");
+	fprintf(fout, "\tuint64_t val64;\n");
+	fprintf(fout, "\tuint32_t val32;\n");
+	fprintf(fout, "\tuint16_t val16;\n");
+	fprintf(fout, "\tbyte val8;\n");
+	fprintf(fout, "\n");
+	fprintf(fout, "\tvoid _print_label(int n) { /* printf(\"%%*.*s- label%%d\\n\", indent, indent, \"\", n); */ }\n");
+	fprintf(fout, "\tvoid _print_return()\n");
+	fprintf(fout, "\t{\n");
+	fprintf(fout, "\t\tprintf(\"%%*.*s=> %%d\", indent, indent, \"\", _eax);\n");
+	fprintf(fout, "\t\tif (' ' <= _eax && _eax < 127) printf(\" '%%c'\", _eax);\n");
+	fprintf(fout, "\t\tprintf(\"\\n\");\n");
+	fprintf(fout, "\t}\n");
+	fprintf(fout, "};\n");
+	fprintf(fout, "\n");
+	fprintf(fout, "int main(int argc, char *argv[])\n");
+	fprintf(fout, "{\n");
+	fprintf(fout, "\tProcess *main_process = mainProcess(argc, argv);\n");
+	fprintf(fout, "\tif (main_process == 0)\n");
+	fprintf(fout, "\t\treturn 0;\n");
+	fprintf(fout, "\t\n");
+	fprintf(fout, "\tMyProcessor processor(main_process);\n");
+	fprintf(fout, "\tprocessor.func1();\n");
+	fprintf(fout, "	\n");
+	fprintf(fout, "\treturn 0;\n");
+	fprintf(fout, "}\n");
+	
+	fclose(fout);
+}
+
+
 
 Process *processes = 0;
 
@@ -501,9 +809,9 @@ public:
 		data = new byte[length];
 		length = read(fh, data, length);
 		printf("Length %08x\n", length);
-		for (uint32_t i = 0; i < length; i++)
-			if (do_trace) trace("%02X ", data[i]);
-		if (do_trace) trace("\n");
+		//for (uint32_t i = 0; i < length; i++)
+		//	if (do_trace) trace("%02X ", data[i]);
+		//if (do_trace) trace("\n");
 		fclose(f);
 		return true;
 	}
@@ -637,6 +945,7 @@ bool loadELF(ProgramFile *file, Process *process)
 		}
 		
 		uint32_t to_mem = ph_vaddr + from_file;
+		process->start_code = to_mem;
 		for (uint32_t j = 0; j < ph_filesz; j++)
 		{
 			//printf("Load byte from %08x: %02x ", from_file, file->data[from_file]);
@@ -665,6 +974,7 @@ public:
 		_pc = _process->pc;
 		for (;;)
 		{
+			START_INST(_pc);
 			if (do_trace) trace("%08x ", _pc);
 			byte opcode = getPC();
 			
@@ -1311,13 +1621,13 @@ public:
 
 						case 0xC3:
 							val32 = getLongPC();
-							CODE(_ebx += val32);
+							CODE_V32(_ebx += val32);
 							if (do_trace) trace(" add_ebx %08x: %08x\n", val32, _ebx);
 							break;
 
 						case 0xC5:
 							val32 = getLongPC();
-							CODE(_ebp += val32);
+							CODE_V32(_ebp += val32);
 							if (do_trace) trace(" add_ebp %08x: %08x\n", val32, _ebp);
 							break;
 								
@@ -2157,77 +2467,13 @@ public:
 					
 				case 0xCD:
 					opcode = getPC();
-					CODE_INT(opcode);
 					if (do_trace) trace(" int %02x\n", opcode);
 					switch (opcode)
 					{
 						case 0x80:
-							switch (_eax)
-							{
-								case 0x01:
-									// Exit
-									if (_process->parent == 0)
-										return;
-									_process->finish();
-									_process = _process->parent;
-									_pc = _process->pc;
-									_ebx = _process->_ebx;
-									_ecx = _process->_ecx;
-									_edx = _process->_edx;
-									_esi = _process->_esi;
-									_edi = _process->_edi;
-									_ebp = _process->_ebp;
-									printf("ebp: %08x\n", _ebp);
-									_flags = _process->_flags;
-
-									if (out_trace)
-										return;
-									printf("Continue executing process %d\n", _process->nr);
-									_eax = 1;
-									break;
-
-								case 0x02:
-									int_fork();
-									break;
-																		
-								case 0x03:
-									int_read();
-									break;
-								
-								case 0x04:
-									int_write();
-									break;
-								
-								case 0x05:
-									int_open_file();
-									break;
-								
-								case 0x06:
-									int_close_file();
-									break;
-								
-								case 0x07:
-									int_wait_pid();
-									break;
-								
-								case 0x0B:
-									if (!int_execve())
-										return;
-									break;
-										
-								case 0x13:
-									int_lseek();
-									break;
-									
-								case 0x2D:
-									int_sys_brk();
-									break;
-									
-								default:
-								    print_trace(stdout);
-									printf("Unknown system call %02x\n", _eax);
-									return;
-							}
+							CODE_INT;
+							if (!int80())
+								return;
 							break;
 						
 						default:
@@ -2272,7 +2518,7 @@ public:
 					{
 						int32_t offset = (int32_t)getLongPC();
 						CODE(_process->push(_pc));
-						CODE_CALL(offset);
+						CODE_CALL(_pc + offset);
 						_pc += offset;
 						if (do_trace) trace(" call %08x\n\n", _pc);
 						indent_depth += 2;
@@ -2356,6 +2602,93 @@ public:
 			}
 		}
 	}
+	
+	bool int80()
+	{
+		switch (_eax)
+		{
+			case 0x01:
+				if (!int_exit())
+					return false;
+				break;
+
+			case 0x02:
+				int_fork();
+				break;
+									
+			case 0x03:
+				int_read();
+				break;
+			
+			case 0x04:
+				int_write();
+				break;
+			
+			case 0x05:
+				int_open_file();
+				break;
+			
+			case 0x06:
+				int_close_file();
+				break;
+			
+			case 0x07:
+				int_wait_pid();
+				break;
+			
+			case 0x0B:
+				if (!int_execve())
+					return false;
+				break;
+					
+			case 0x13:
+				int_lseek();
+				break;
+				
+			case 0x2D:
+				int_sys_brk();
+				break;
+				
+			default:
+			    print_trace(stdout);
+				printf("Unknown system call %02x\n", _eax);
+				return false;
+		}
+		
+		return true;
+	}
+	
+	bool int_exit()
+	{
+		if (do_gen)
+		{
+			generate_code(_process);
+			do_gen = false;
+			statements = 0;
+			return false;
+		}
+		// Exit
+		if (_process->parent == 0)
+			return false;
+		_process->finish();
+		_process = _process->parent;
+		_pc = _process->pc;
+		_ebx = _process->_ebx;
+		_ecx = _process->_ecx;
+		_edx = _process->_edx;
+		_esi = _process->_esi;
+		_edi = _process->_edi;
+		_ebp = _process->_ebp;
+		printf("ebp: %08x\n", _ebp);
+		_flags = _process->_flags;
+
+		if (out_trace)
+			return false;
+		printf("Continue executing process %d\n", _process->nr);
+		_eax = 1;
+
+		return true;
+	}	
 	
 	void int_open_file()
 	{
@@ -2566,8 +2899,13 @@ public:
 		printf("Start running process %d\n", _process->nr);
 		if (_process->nr == 20)
 		{
-			do_trace = true;
+			//do_trace = true;
 			//out_trace = true;
+		}
+		if (_process->nr == 20)
+		{
+			init_statements(_process->start_code, _process->end_code);
+			start_pc = _process->pc;
 		}
 		
 		return true;
@@ -2601,7 +2939,7 @@ public:
 		printf("Unknown opcode in %s\n", _process->name);
 	}
 
-private:
+protected:
 	byte getPC()
 	{
 		byte v = _process->loadByte(_pc);
@@ -2641,7 +2979,8 @@ private:
 	int32_t _flags;
 };
 
-int main(int argc, char *argv[])
+
+Process *mainProcess(int argc, char *argv[])
 {
 	if (argc < 3)
 	{
@@ -2662,7 +3001,7 @@ int main(int argc, char *argv[])
 	ProgramFile program;
 	if (!program.open(file->path))
 	{
-		fprintf(stderr, "Could not read '%s'\n", argv[2]);
+		fprintf(stderr, "Could not read '%s' ('%s')\n", argv[2], file->path);
 		return 0;
 	}
 	
@@ -2675,8 +3014,20 @@ int main(int argc, char *argv[])
 	char *env[1] = { 0 };
 	main_process->init(argc - 2, argv + 2, env);
 	
+	return main_process;
+}	
+
+
+#ifndef INCLUDED
+int main(int argc, char *argv[])
+{
+	Process *main_process = mainProcess(argc, argv);
+	if (main_process == 0)
+		return 0;
+		
 	Processor processor(main_process);
 	processor.run();
 	
 	return 0;	
 }
+#endif
