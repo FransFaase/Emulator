@@ -74,3 +74,13 @@ message length of the trace functions. Now it seems to compile `cc_x86` correctl
 it also seems to process `M2-0.c` correctly. But the resulting `M2` program contains
 some instructions that are not supported yet. These are mentioned in
 [`x86_defs.M1`](https://github.com/oriansj/stage0-posix-x86/blob/991f9b91b1b99bbb613a87cac619ba32b9555e88/x86_defs.M1).
+
+## Code generation
+
+In commit [](https://github.com/FransFaase/Emulator/commit/8b1d70057fe2e5ca993bdd324c824bfba5a938f8),
+I have implemented code generation. When executed, it produces a program called `program.cpp`
+which has (it seems) the same behaviour as the emulator executing the `M2`. A file called
+`functions.txt` can contain, seperate by a space, a hexadecimal number of an address and
+a function name, that will be used to name functions (actually methods) in the generated
+`program.cpp` file.
+
