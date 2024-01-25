@@ -31,6 +31,7 @@ void indent(FILE *fout) { fprintf(fout, "%*.*s", indent_depth, indent_depth, "")
 bool do_trace = false;
 bool out_trace = false;
 int nr_ret;
+bool trace_mem = false;
 
 void trace(const char* format, ...)
 {
@@ -113,6 +114,7 @@ struct Statement
 	uint16_t val16;
 	byte val8;
 	FunctionCall *func_calls;
+	char gen_state;
 	
 	Statement()
 	{
@@ -358,8 +360,9 @@ public:
 	}
 	
 	void finish();
-	
-	byte loadByte(uint32_t address)
+
+private:	
+	byte _loadByte(uint32_t address)
 	{
 		byte hi = (byte)((address >> 24) & 0xff);
 		if (memory[hi] == 0)
@@ -370,7 +373,7 @@ public:
 		return memory[hi][hi2][(address & 0xffff)];
 	}
 
-	void storeByte(uint32_t address, byte value)
+	void _storeByte(uint32_t address, byte value)
 	{
 		byte hi = (byte)((address >> 24) & 0xff);
 		if (memory[hi] == 0)
@@ -384,20 +387,40 @@ public:
 			memory[hi][hi2] = (byte*)malloc(0x10000 * sizeof(byte));
 		memory[hi][hi2][(address & 0xffff)] = value;
 	}
+public:
 	
+	byte loadByte(uint32_t address)
+	{
+		byte result = _loadByte(address);
+		if (trace_mem)
+			printf("Load %02x from %08x\n", result, address);
+		return result;
+	}
+				
+	void storeByte(uint32_t address, byte value)
+	{
+		if (trace_mem)
+			printf("Store %02x at %08x\n", value, address);
+		_storeByte(address, value);
+	}
+
 	uint32_t loadDWord(uint32_t address)
 	{
 		uint32_t value = 0;
 		for (int i = 0; i < 4; i++)
-			value |= (uint32_t)loadByte(address + i) << (i * 8);
+			value |= (uint32_t)_loadByte(address + i) << (i * 8);
+		if (trace_mem)
+			printf("Load %08x from %08x\n", value, address);
 		return value;
 	}
 	
 	void storeDWord(uint32_t address, uint32_t value)
 	{
+		if (trace_mem)
+			printf("Store %08x at %08x\n", value, address);
 		for (int i = 0; i < 4; i++)
 		{
-			storeByte(address + i, value & 0xff);
+			_storeByte(address + i, value & 0xff);
 			value = value >> 8;
 		}
 	}
@@ -405,11 +428,12 @@ public:
 	void push(uint32_t value)
 	{
 		sp -= 4;
+		if (trace_mem) printf("push %08x to %08x\n", value, sp);
 		if (do_trace) trace("push %08x to %08x\n", value, sp);
-		storeByte(sp    , (byte)value);
-		storeByte(sp + 1, (byte)(value >> 8));
-		storeByte(sp + 2, (byte)(value >> 16));
-		storeByte(sp + 3, (byte)(value >> 24));
+		_storeByte(sp    , (byte)value);
+		_storeByte(sp + 1, (byte)(value >> 8));
+		_storeByte(sp + 2, (byte)(value >> 16));
+		_storeByte(sp + 3, (byte)(value >> 24));
 	}
 	
 	uint32_t pop()
@@ -420,10 +444,11 @@ public:
 			exit(-1);
 		}
 		uint32_t value = 0;
-		value |= ((uint32_t)loadByte(sp));
-		value |= ((uint32_t)loadByte(sp + 1)) << 8;
-		value |= ((uint32_t)loadByte(sp + 2)) << 16;
-		value |= ((uint32_t)loadByte(sp + 3)) << 24;
+		value |= ((uint32_t)_loadByte(sp));
+		value |= ((uint32_t)_loadByte(sp + 1)) << 8;
+		value |= ((uint32_t)_loadByte(sp + 2)) << 16;
+		value |= ((uint32_t)_loadByte(sp + 3)) << 24;
+		if (trace_mem) printf("pop %08x from %08x\n", value, sp);
 		if (do_trace) trace("pop %08x from %08x\n", value, sp);
 		sp += 4;
 		
@@ -490,15 +515,16 @@ char *name_for_function(uint32_t addr, int function_enter)
 		if (fn->addr == addr)
 			return fn->name;
 	static char buffer[100];
-	sprintf(buffer, "func%d", function_enter);
+	if (function_enter == -1)
+		sprintf(buffer, "%x", addr);
+	else
+		sprintf(buffer, "func%d", function_enter);
 	return buffer;
 }
 
 
 void generate_code(Process *process)
 {
-	read_function_names();
-	
 	int func_nr = 1;
 	int label_nr = 1;
 	uint32_t len = end_code - start_code;
@@ -548,117 +574,155 @@ void generate_code(Process *process)
 	fprintf(fout, "\n");
 	
 
-	bool in_func = false;
 	for (uint32_t i = 0; i < len; i++)
 	{
 		Statement *stat = statements[i];
-		if (stat != 0)
+		if (stat != 0 && stat->function_enter > 0)
 		{
-			if (stat->function_enter > 0)
+			for (int j = 0; j < len; j++)
+				if (statements[j] != 0)
+					statements[j]->gen_state = ' ';
+			stat->gen_state = 'g';
+					
+			fprintf(fout, "\tvoid %s()\n\t{\n", name_for_function(start_code + i, stat->function_enter));
+			fprintf(fout, "\t\tindent += 2; printf(\"%%*.*s%s\\n\", indent, indent, \"\");\n", name_for_function(start_code + i, stat->function_enter));
+			for (int labels_to_go = 1; labels_to_go > 0; )
 			{
-				if (in_func)
-					fprintf(fout, "\t}\n\n");
-				fprintf(fout, "\tvoid %s()\n\t{\n", name_for_function(start_code + i, stat->function_enter));
-				fprintf(fout, "\t\tindent += 2; printf(\"%%*.*s%s\\n\", indent, indent, \"\");\n", name_for_function(start_code + i, stat->function_enter));
-				in_func = true;
-			}
-			if (stat->label_pos > 0)
-			{
-				fprintf(fout, "\tlabel%d: _print_label(%d);%s\n", stat->label_pos, stat->label_pos, stat->is_loop ? " // loop" : "");
-			}
-			fprintf(fout, "\t/* %08x %c */ ", start_code + i, stat->kind);
-			if (stat->kind == 'j')
-			{
-				uint32_t index = stat->val32 - start_code;
-				if (index >= len || statements[index] == 0)
-					fprintf(fout, "if (%s) { /* Jump is never taken. ERROR %08x %08x */ }", stat->code, stat->val32, index);
-				else
-					fprintf(fout, "if (%s) goto label%d;", stat->code, statements[index]->label_pos);
-			}
-			else if (stat->kind == 'c')
-			{
-				if (stat->func_calls != 0 && stat->func_calls->next == 0)
+				bool output = false;
+				for (int k = 0; k < len; k++)
 				{
-					uint32_t index = stat->func_calls->addr - start_code;
-					if (index >= len || statements[index] == 0)
-						fprintf(fout, "/* Jump ERROR %08x %08x */", stat->val32, index);
-					else
-						fprintf(fout, "%s;\t\t\t\t\t%s();", stat->code, name_for_function(stat->func_calls->addr, statements[index]->function_enter));
-				}
-				else
-					fprintf(fout, "/* ERROR call */");
-				
-			}
-			else if (stat->kind == 'i')
-			{
-				switch (stat->val32)
-				{
-					case 0x01: fprintf(fout, "if (!int_exit()) exit(1);"); break;
-					case 0x02: fprintf(fout, "int_fork();"); break;
-					case 0x03: fprintf(fout, "int_read();"); break;
-					case 0x04: fprintf(fout, "int_write();"); break;
-					case 0x05: fprintf(fout, "int_open_file();"); break;
-					case 0x06: fprintf(fout, "int_close_file();"); break;
-					case 0x07: fprintf(fout, "int_wait_pid();"); break;
-					case 0x0B: fprintf(fout, "if (!int_execve()) exit(1);"); break;
-					case 0x13: fprintf(fout, "int_lseek();"); break;
-					case 0x2D: fprintf(fout, "int_sys_brk();"); break;
-					default:   fprintf(fout, "if (!int80()) exit(1);"); break;
-				}
-			}
-			else if (stat->kind == 'r')
-			{
-				fprintf(fout, "%s; _print_return(); indent -= 2; return;", stat->code);
-			}
-			else
-			{
-				if (stat->kind == 'b')
-					fprintf(fout, "val8 = 0x%02x; ", stat->val8);
-				else if (stat->kind == 'w')
-					fprintf(fout, "val16 = 0x%04x; ", stat->val16);
-				else if (stat->kind == 'l')
-				{
-					fprintf(fout, "val32 = 0x%08x; ", stat->val32);
-					if (start_code <= stat->val32 && stat->val32 < end_code)
+					stat = statements[k];
+					if (stat == 0) continue;
+					
+					if (stat->gen_state == 'g')
 					{
-						uint32_t p = stat->val32;
-						bool is_string = true;
-						for(; p < end_code; p++)
+						stat->gen_state = 'D';
+						labels_to_go--;
+						output = true;
+					}
+					
+					if (!output) continue;
+					
+					if (stat->label_pos > 0)
+					{
+						fprintf(fout, "\t\tlabel%d: _print_label(%d);%s\n", stat->label_pos, stat->label_pos, stat->is_loop ? " // loop" : "");
+						if (stat->gen_state == 'g')
+							labels_to_go--;
+						stat->gen_state = 'D';
+					}
+
+					if (stat->function_enter > 0 && stat->gen_state == ' ')
+					{
+						fprintf(fout, "\t\t\t\t\t\t\t%s();\n", name_for_function(start_code + k, stat->function_enter));
+						fprintf(fout, "\t\t_print_return(); indent -= 2; return; \n");  
+						output = false;
+						continue;
+					}
+
+					fprintf(fout, "\t\t/* %08x %c */ ", start_code + k, stat->kind);
+					if (stat->kind == 'j')
+					{
+						uint32_t index = stat->val32 - start_code;
+						if (index >= len || statements[index] == 0)
+							fprintf(fout, "if (%s) { /* Jump is never taken. ERROR %08x %08x */ }", stat->code, stat->val32, index);
+						else
 						{
-							byte ch = process->loadByte(p);
-							if (ch == '\0')
-								break;
-							if (ch != '\n' && ch != '\t' && (ch < ' ' || ch > 127))
+							fprintf(fout, "if (%s) goto label%d;", stat->code, statements[index]->label_pos);
+							if (statements[index]->gen_state == ' ')
 							{
-								is_string = false;
-								break;
+								statements[index]->gen_state = 'g';
+								labels_to_go++;
 							}
-						}
-						if (is_string && p > stat->val32)
-						{
-							fprintf(fout, "/* \"");
-							for (uint32_t i = stat->val32; i < p; i++)
-							{
-								byte ch = process->loadByte(i);
-								if (ch == '\n')
-									fprintf(fout, "\\n");
-								else if (ch == '\t')
-									fprintf(fout, "\\t");
-								else
-									fprintf(fout, "%c", ch);
-							}
-							fprintf(fout, "\" */ ");
+							if (strcmp(stat->code, "true") == 0)
+								output = false;
 						}
 					}
+					else if (stat->kind == 'c')
+					{
+						if (stat->func_calls != 0 && stat->func_calls->next == 0)
+						{
+							uint32_t index = stat->func_calls->addr - start_code;
+							if (index >= len || statements[index] == 0)
+								fprintf(fout, "/* Jump ERROR %08x %08x */", stat->val32, index);
+							else
+								fprintf(fout, "%s;\t\t\t\t\t%s();", stat->code, name_for_function(stat->func_calls->addr, statements[index]->function_enter));
+						}
+						else
+							fprintf(fout, "/* ERROR call */");
+						
+					}
+					else if (stat->kind == 'i')
+					{
+						switch (stat->val32)
+						{
+							case 0x01: fprintf(fout, "if (!int_exit()) exit(1);"); break;
+							case 0x02: fprintf(fout, "int_fork();"); break;
+							case 0x03: fprintf(fout, "int_read();"); break;
+							case 0x04: fprintf(fout, "int_write();"); break;
+							case 0x05: fprintf(fout, "int_open_file();"); break;
+							case 0x06: fprintf(fout, "int_close_file();"); break;
+							case 0x07: fprintf(fout, "int_wait_pid();"); break;
+							case 0x0B: fprintf(fout, "if (!int_execve()) exit(1);"); break;
+							case 0x13: fprintf(fout, "int_lseek();"); break;
+							case 0x2D: fprintf(fout, "int_sys_brk();"); break;
+							default:   fprintf(fout, "if (!int80()) exit(1);"); output = false; break;
+						}
+					}
+					else if (stat->kind == 'r')
+					{
+						fprintf(fout, "%s; _print_return(); indent -= 2; return;", stat->code);
+						output = false;
+					}
+					else
+					{
+						if (stat->kind == 'b')
+							fprintf(fout, "val8 = 0x%02x; ", stat->val8);
+						else if (stat->kind == 'w')
+							fprintf(fout, "val16 = 0x%04x; ", stat->val16);
+						else if (stat->kind == 'l')
+						{
+							fprintf(fout, "val32 = 0x%08x; ", stat->val32);
+							if (start_code <= stat->val32 && stat->val32 < end_code)
+							{
+								uint32_t p = stat->val32;
+								bool is_string = true;
+								for(; p < end_code; p++)
+								{
+									byte ch = process->loadByte(p);
+									if (ch == '\0')
+										break;
+									if (ch != '\n' && ch != '\t' && (ch < ' ' || ch > 127))
+									{
+										is_string = false;
+										break;
+									}
+								}
+								if (is_string && p > stat->val32)
+								{
+									fprintf(fout, "/* \"");
+									for (uint32_t i = stat->val32; i < p; i++)
+									{
+										byte ch = process->loadByte(i);
+										if (ch == '\n')
+											fprintf(fout, "\\n");
+										else if (ch == '\t')
+											fprintf(fout, "\\t");
+										else
+											fprintf(fout, "%c", ch);
+									}
+									fprintf(fout, "\" */ ");
+								}
+							}
+						}
+						if (stat->code != 0)
+							fprintf(fout, "%s;", stat->code);
+					}
+					fprintf(fout, "\n");
 				}
-				if (stat->code != 0)
-					fprintf(fout, "%s;", stat->code);
 			}
-			fprintf(fout, "\n");
+			fprintf(fout, "\t}\n\n");
 		}
 	}
-	if (in_func)
-		fprintf(fout, "\t}\n");
 	fprintf(fout, "private:\n");
 	fprintf(fout, "\tuint64_t val64;\n");
 	fprintf(fout, "\tuint32_t val32;\n");
@@ -972,6 +1036,13 @@ public:
 	void run()
 	{
 		_pc = _process->pc;
+		_eax = 0;
+		_ebx = 0;
+		_ecx = 0;
+		_edx = 0;
+		_esi = 0;
+		_edi = 0;
+		_ebp = 0;
 		for (;;)
 		{
 			START_INST(_pc);
@@ -1649,103 +1720,103 @@ public:
 							
 						case 0xC1:
 							val8 = getPC();
-							CODE(_ecx += SIGNEXT(val8));
+							CODE_V8(_ecx += SIGNEXT(val8));
 							if (do_trace) trace(" add_ecx %02x %08x\n", val8, _ecx);
 							break;
 							
 						case 0xC2:
 							val8 = getPC();
-							CODE(_edx += SIGNEXT(val8));
+							CODE_V8(_edx += SIGNEXT(val8));
 							if (do_trace) trace(" add_edx %02x %08x\n", val8, _edx);
 							break;
 						
 						case 0xC3:
 							val8 = getPC();
-							CODE(_ebx += SIGNEXT(val8));
+							CODE_V8(_ebx += SIGNEXT(val8));
 							if (do_trace) trace(" add_ebx %02x %08x\n", val8, _ebx);
 							break;
 						
 						case 0xC5:
 							val8 = getPC();
-							CODE(_ebp += SIGNEXT(val8));
+							CODE_V8(_ebp += SIGNEXT(val8));
 							if (do_trace) trace(" add_ebp %02x: %08x\n", val8, _ebp);
 							break;
 						
 						case 0xC6:
 							val8 = getPC();
-							CODE(_esi += SIGNEXT(val8));
+							CODE_V8(_esi += SIGNEXT(val8));
 							if (do_trace) trace(" add_esi %02x: %08x\n", val8, _esi);
 							break;
 						
 						case 0xC7:
 							val8 = getPC();
-							CODE(_edi += SIGNEXT(val8));
+							CODE_V8(_edi += SIGNEXT(val8));
 							if (do_trace) trace(" add_edi %02x: %08x\n", val8, _edi);
 							break;
 						
 						case 0xE0: // https://www.felixcloutier.com/x86/sub
 							val8 = getPC();
-							CODE(_eax = _eax & SIGNEXT(val8));
+							CODE_V8(_eax = _eax & SIGNEXT(val8));
 							if (do_trace) trace(" sub _eax %02x: %08x\n", val8, _eax);
 							break;
 								
 						case 0xE8: // https://www.felixcloutier.com/x86/sub
 							val8 = getPC();
-							CODE(_eax -= SIGNEXT(val8));
+							CODE_V8(_eax -= SIGNEXT(val8));
 							if (do_trace) trace(" sub _eax %02x: %08x\n", val8, _eax);
 							break;
 								
 						case 0xE9: // https://www.felixcloutier.com/x86/sub
 							val8 = getPC();
-							CODE(_ecx -= SIGNEXT(val8));
+							CODE_V8(_ecx -= SIGNEXT(val8));
 							if (do_trace) trace(" sub _ecx %02x: %08x\n", val8, _ecx);
 							break;
 								
 						case 0xEE:
 							val8 = getPC();
-							CODE(_esi -= SIGNEXT(val8));
+							CODE_V8(_esi -= SIGNEXT(val8));
 							if (do_trace) trace(" sub _esi %02x: %08x\n", val8, _esi);
 							break;
 								
 						case 0xF8: // https://www.felixcloutier.com/x86/cmp
 							val8 = getPC();
-							CODE(_flags = _eax - SIGNEXT(val8));
+							CODE_V8(_flags = _eax - SIGNEXT(val8));
 							if (do_trace) trace(" cmp _eax %02x: %08x\n", val8, _flags);
 							break;
 								
 						case 0xF9: // https://www.felixcloutier.com/x86/cmp
 							val8 = getPC();
-							CODE(_flags = _ecx - SIGNEXT(val8));
+							CODE_V8(_flags = _ecx - SIGNEXT(val8));
 							if (do_trace) trace(" cmp _ecx %02x: %08x\n", val8, _flags);
 							break;
 								
 						case 0xFA: // https://www.felixcloutier.com/x86/cmp
 							val8 = getPC();
-							CODE(_flags = _edx - SIGNEXT(val8));
+							CODE_V8(_flags = _edx - SIGNEXT(val8));
 							if (do_trace) trace(" cmp _edx %02x: %08x\n", val8, _flags);
 							break;
 
 						case 0xFB: // https://www.felixcloutier.com/x86/cmp
 							val8 = getPC();
-							CODE(_flags = _ebx - SIGNEXT(val8));
+							CODE_V8(_flags = _ebx - SIGNEXT(val8));
 							if (do_trace) trace(" cmp _ebx %02x: %08x\n", val8, _flags);
 							break;
 
 						case 0xFD: // https://www.felixcloutier.com/x86/cmp
 							val8 = getPC();
-							CODE(_flags = _ebp - SIGNEXT(val8));
+							CODE_V8(_flags = _ebp - SIGNEXT(val8));
 							if (do_trace) trace(" cmp _ebp %02x: %08x\n", val8, _flags);
 							break;
 								
 						case 0xFE: // https://www.felixcloutier.com/x86/cmp
 							val8 = getPC();
-							CODE(_flags = _esi - SIGNEXT(val8));
+							CODE_V8(_flags = _esi - SIGNEXT(val8));
 							if (do_trace) trace(" cmp _esi %02x: %08x\n", val8, _flags);
 							break;
 								
 						case 0xFF: // https://www.felixcloutier.com/x86/cmp
 							val8 = getPC();
-							CODE(_flags = _edi - SIGNEXT(val8));
+							CODE_V8(_flags = _edi - SIGNEXT(val8));
 							if (do_trace) trace(" cmp _edi %02x: %08x\n", val8, _flags);
 							break;
 								
@@ -2142,7 +2213,7 @@ public:
 						case 0x1B:
 							CODE(_ebx = _process->loadDWord(_ebx));
 							if (do_trace) trace(" mov_ebs,[ebx] %08x\n", _ebx);
-						break;
+							break;
 					
 						case 0x1D:
 							val32 = getLongPC();
@@ -2520,7 +2591,7 @@ public:
 						CODE(_process->push(_pc));
 						CODE_CALL(_pc + offset);
 						_pc += offset;
-						if (do_trace) trace(" call %08x\n\n", _pc);
+						if (do_trace) trace(" call %s\n\n", name_for_function(_pc, -1));
 						indent_depth += 2;
 					}
 					break;
@@ -2615,7 +2686,7 @@ public:
 			case 0x02:
 				int_fork();
 				break;
-									
+			
 			case 0x03:
 				int_read();
 				break;
@@ -2896,11 +2967,20 @@ public:
 		
 		_process->init(argc, argv, env);
 		_pc = _process->pc;
+		_eax = 0;
+		_ebx = 0;
+		_ecx = 0;
+		_edx = 0;
+		_esi = 0;
+		_edi = 0;
+		_ebp = 0;
 		printf("Start running process %d\n", _process->nr);
 		if (_process->nr == 20)
 		{
 			//do_trace = true;
 			//out_trace = true;
+			//trace_mem = true;
+			read_function_names();
 		}
 		if (_process->nr == 20)
 		{
