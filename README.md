@@ -77,10 +77,18 @@ some instructions that are not supported yet. These are mentioned in
 
 ## Code generation
 
-In commit [](https://github.com/FransFaase/Emulator/commit/8b1d70057fe2e5ca993bdd324c824bfba5a938f8),
+In commit [8b1d7005](https://github.com/FransFaase/Emulator/commit/8b1d70057fe2e5ca993bdd324c824bfba5a938f8),
 I have implemented code generation. When executed, it produces a program called `program.cpp`
 which has (it seems) the same behaviour as the emulator executing the `M2`. A file called
 `functions.txt` can contain, seperate by a space, a hexadecimal number of an address and
 a function name, that will be used to name functions (actually methods) in the generated
 `program.cpp` file.
+
+## M1 Emulator
+
+In the process of debugging the Emulator, I developed the program `M1_Emulator.cpp` that
+can generate a program based on an `M1` file. I also developed a program to compare the
+two types of generated program. This program is called `sdiff.cpp`. While working on this,
+I discovered that no code is generated for the call on EAX-register instruction. These
+can be found in the commit [9fe05336](https://github.com/FransFaase/Emulator/commit/9fe0533698686a062b678217cce3b0eb3f5c8778).
 
