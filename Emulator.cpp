@@ -522,6 +522,22 @@ char *name_for_function(uint32_t addr, int function_enter)
 	return buffer;
 }
 
+void replace_with_val(FILE *fout, const char *code, const char *parm, uint32_t val, const char *fmt)
+{
+	int parm_len = strlen(parm);
+	while (*code != '\0')
+		if (*code == 'v' && strncmp(code, parm, parm_len) == 0)
+		{
+			fprintf(fout, fmt, val);
+			code += parm_len;
+		}
+		else
+		{
+			fprintf(fout, "%c", *code);
+			code++;
+		}
+	fprintf(fout, ";");
+}
 
 void generate_code(Process *process)
 {
@@ -570,7 +586,7 @@ void generate_code(Process *process)
 	fprintf(fout, "{\n");
 	fprintf(fout, "  int indent;");
 	fprintf(fout, "public:\n");
-	fprintf(fout, "\tMyProcessor(Process *proc) : Processor(proc), indent(0) {}\n");
+	fprintf(fout, "\tMyProcessor(Process *proc) : Processor(proc), indent(0), trace_func(false) {}\n");
 	fprintf(fout, "\n");
 	
 
@@ -579,17 +595,17 @@ void generate_code(Process *process)
 		Statement *stat = statements[i];
 		if (stat != 0 && stat->function_enter > 0)
 		{
-			for (int j = 0; j < len; j++)
+			for (uint32_t j = 0; j < len; j++)
 				if (statements[j] != 0)
 					statements[j]->gen_state = ' ';
 			stat->gen_state = 'g';
 					
 			fprintf(fout, "\tvoid %s()\n\t{\n", name_for_function(start_code + i, stat->function_enter));
-			fprintf(fout, "\t\tindent += 2; printf(\"%%*.*s%s\\n\", indent, indent, \"\");\n", name_for_function(start_code + i, stat->function_enter));
+			fprintf(fout, "\t\tindent += 2; if (trace_func) printf(\"%%*.*s%s\\n\", indent, indent, \"\");\n", name_for_function(start_code + i, stat->function_enter));
 			for (int labels_to_go = 1; labels_to_go > 0; )
 			{
 				bool output = false;
-				for (int k = 0; k < len; k++)
+				for (uint32_t k = 0; k < len; k++)
 				{
 					stat = statements[k];
 					if (stat == 0) continue;
@@ -614,12 +630,13 @@ void generate_code(Process *process)
 					if (stat->function_enter > 0 && stat->gen_state == ' ')
 					{
 						fprintf(fout, "\t\t\t\t\t\t\t%s();\n", name_for_function(start_code + k, stat->function_enter));
-						fprintf(fout, "\t\t_print_return(); indent -= 2; return; \n");  
+						fprintf(fout, "\t\tif (trace_func) _print_return();\n\t\tindent -= 2; return; \n");  
 						output = false;
 						continue;
 					}
 
-					fprintf(fout, "\t\t/* %08x %c */ ", start_code + k, stat->kind);
+					//fprintf(fout, "\t\t/* %08x %c */ ", start_code + k, stat->kind);
+					fprintf(fout, "\t\t");
 					if (stat->kind == 'j')
 					{
 						uint32_t index = stat->val32 - start_code;
@@ -655,7 +672,7 @@ void generate_code(Process *process)
 					{
 						switch (stat->val32)
 						{
-							case 0x01: fprintf(fout, "if (!int_exit()) exit(1);"); break;
+							case 0x01: fprintf(fout, "if (!int_exit()) exit(1);"); output = false; break;
 							case 0x02: fprintf(fout, "int_fork();"); break;
 							case 0x03: fprintf(fout, "int_read();"); break;
 							case 0x04: fprintf(fout, "int_write();"); break;
@@ -665,23 +682,23 @@ void generate_code(Process *process)
 							case 0x0B: fprintf(fout, "if (!int_execve()) exit(1);"); break;
 							case 0x13: fprintf(fout, "int_lseek();"); break;
 							case 0x2D: fprintf(fout, "int_sys_brk();"); break;
-							default:   fprintf(fout, "if (!int80()) exit(1);"); output = false; break;
+							default:   fprintf(fout, "// unhandled int80 %d", stat->val32); break;
 						}
 					}
 					else if (stat->kind == 'r')
 					{
-						fprintf(fout, "%s; _print_return(); indent -= 2; return;", stat->code);
+						fprintf(fout, "%s; if (trace_func) _print_return();\n\t\tindent -= 2; return;", stat->code);
 						output = false;
 					}
 					else
 					{
 						if (stat->kind == 'b')
-							fprintf(fout, "val8 = 0x%02x; ", stat->val8);
+							replace_with_val(fout, stat->code, "val8", stat->val8, "%u");
 						else if (stat->kind == 'w')
-							fprintf(fout, "val16 = 0x%04x; ", stat->val16);
+							replace_with_val(fout, stat->code, "val16", stat->val16, "%u");
 						else if (stat->kind == 'l')
 						{
-							fprintf(fout, "val32 = 0x%08x; ", stat->val32);
+							replace_with_val(fout, stat->code, "val32", stat->val32, "0x%08x");
 							if (start_code <= stat->val32 && stat->val32 < end_code)
 							{
 								uint32_t p = stat->val32;
@@ -714,7 +731,7 @@ void generate_code(Process *process)
 								}
 							}
 						}
-						if (stat->code != 0)
+						else
 							fprintf(fout, "%s;", stat->code);
 					}
 					fprintf(fout, "\n");
@@ -728,6 +745,8 @@ void generate_code(Process *process)
 	fprintf(fout, "\tuint32_t val32;\n");
 	fprintf(fout, "\tuint16_t val16;\n");
 	fprintf(fout, "\tbyte val8;\n");
+	fprintf(fout, "\n");
+	fprintf(fout, "\tbool trace_func;\n");
 	fprintf(fout, "\n");
 	fprintf(fout, "\tvoid _print_label(int n) { /* printf(\"%%*.*s- label%%d\\n\", indent, indent, \"\", n); */ }\n");
 	fprintf(fout, "\tvoid _print_return()\n");
@@ -743,6 +762,7 @@ void generate_code(Process *process)
 	fprintf(fout, "\tProcess *main_process = mainProcess(argc, argv);\n");
 	fprintf(fout, "\tif (main_process == 0)\n");
 	fprintf(fout, "\t\treturn 0;\n");
+	fprintf(fout, "\t\n");
 	fprintf(fout, "\t\n");
 	fprintf(fout, "\tMyProcessor processor(main_process);\n");
 	fprintf(fout, "\tprocessor.func1();\n");
@@ -2975,15 +2995,15 @@ public:
 		_edi = 0;
 		_ebp = 0;
 		printf("Start running process %d\n", _process->nr);
-		if (_process->nr == 20)
+		if (_process->nr == 15)
 		{
 			//do_trace = true;
 			//out_trace = true;
 			//trace_mem = true;
-			read_function_names();
 		}
-		if (_process->nr == 20)
+		if (_process->nr == 15)
 		{
+			read_function_names();
 			init_statements(_process->start_code, _process->end_code);
 			start_pc = _process->pc;
 		}
@@ -3057,6 +3077,30 @@ protected:
 	uint32_t _edi;
 	uint32_t _ebp;
 	int32_t _flags;
+
+	
+// For debugging generated programs:
+public:
+	void print_string(FILE* fout, const char *name, uint32_t addr)
+	{
+		fprintf(fout, "String %s %08x '", name, addr);
+		for (int i = 0; i < 20; i++)
+		{
+			byte b = _process->loadByte(addr);
+			if (b == '\0')
+			{
+				fprintf(fout, "'");
+				break;
+			}
+			if (b >= ' ' && b < 127)
+				fprintf(fout, "%c", b);
+			else
+				fprintf(fout, "\\%02X", b);
+			addr++;
+		}
+		printf("\n");
+	}
+
 };
 
 
