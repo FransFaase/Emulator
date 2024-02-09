@@ -74,6 +74,35 @@ bool match(const char *s, const char *p, char *vars)
 	return false;
 }
 
+int toNumber(const char *s)
+{
+	int result = 0;
+	if (*s == '0' && s[1] == 'x')
+	{
+		for (s += 2; *s != '\0'; s++)
+			if ('0' <= *s && *s <= '9')
+				result = 16 * result + *s - '0';
+			else if ('a' <= *s && *s <= 'f')
+				result = 16 * result + *s - 'a' + 10;
+			else if ('A' <= *s && *s <= 'F')
+				result = 16 * result + *s - 'A' + 10;
+	}
+	else
+	{
+		int sign = 1;
+		if (*s == '-')
+		{
+			s++;
+			sign = -1;
+		}
+		for (; *s != '\0'; s++)
+			if ('0' <= *s && *s <= '9')
+				result = 10 * result + *s - '0';
+		result *= sign;
+	}
+	return result;
+}
+
 int main(int argc, char *argv[])
 {
 	if (argc != 2)
@@ -225,13 +254,19 @@ int main(int argc, char *argv[])
 		{
 			fprintf(fout, "\t\t_%3.3s = _%3.3s & _%s;\n", vars, vars, vars + 3);
 		}
-		else if (strcmp(token->value, "ANDI32_EAX") == 0)
+		else if (match(token->value, "ANDI32_???", vars))
 		{
-			fprintf(fout, "\t\tERROR %s\n", token->value);
+			if (token->next != 0 && token->next->mode == '%')
+			{
+				token = token->next;
+				fprintf(fout, "\t\t_%s = _%s & 0x%08x;\n", vars, vars, toNumber(token->value));
+			}
+			else
+				fprintf(fout, "\t\tERROR %s\n", token->value);
 		}
-		else if (strcmp(token->value, "CALL_EAX") == 0)
+		else if (match(token->value, "CALL_???", vars))
 		{
-			fprintf(fout, "\t\tERROR %s\n", token->value);
+			fprintf(fout, "\t\t_process->push(_pc);\t\t\t\t\t_call_reg(_%s);\n", vars);
 		}
 		else if (strcmp(token->value, "CALL32") == 0)
 		{
@@ -261,21 +296,24 @@ int main(int argc, char *argv[])
 		{
 			fprintf(fout, "\t\t_%3.3s = _%3.3s;\n", vars + 3, vars);
 		}
-		else if (strcmp(token->value, "IDIV_EBX") == 0)
+		else if (match(token->value, "IDIV_???", vars))
 		{
-			fprintf(fout, "\t\tERROR %s\n", token->value);
+			fprintf(fout, "\t\tval64 = (int64_t)((((uint64_t)_edx) << 32) | _eax ) ; _edx = (uint32_t)(val64 %% (int32_t) _%s) ; _eax = (uint32_t)(val64 / (int32_t)_%s);\n",
+				 vars, vars);
 		}
 		else if (strcmp(token->value, "IMUL_EAX_by_EBX") == 0)
 		{
 			fprintf(fout, "\t\tERROR %s\n", token->value);
 		}
-		else if (strcmp(token->value, "IMULI8_EAX") == 0)
+		else if (match(token->value, "IMULI8_???", vars))
 		{
-			fprintf(fout, "\t\tERROR %s\n", token->value);
-		}
-		else if (strcmp(token->value, "IMULI8_EBP") == 0)
-		{
-			fprintf(fout, "\t\tERROR %s\n", token->value);
+			if (token->next != 0 && token->next->mode == '!')
+			{
+				token = token->next;
+				fprintf(fout, "\t\t_%s *=  SIGNEXT(%s);\n", vars, token->value);
+			}
+			else
+				fprintf(fout, "\t\tERROR %s\n", token->value);
 		}
 		else if (strcmp(token->value, "INT_80") == 0)
 		{
@@ -289,7 +327,7 @@ int main(int argc, char *argv[])
 				default: fprintf(fout, "\t\tint80(); // %d\n", _eax_int_80);
 			}
 		}
-		else if (strcmp(token->value, "JBE8") == 0)
+		else if (strcmp(token->value, "c") == 0)
 		{
 			fprintf(fout, "\t\tERROR %s\n", token->value);
 		}
@@ -313,9 +351,15 @@ int main(int argc, char *argv[])
 			else
 				fprintf(fout, "\t\tERROR %s\n", token->value);
 		}
-		else if (strcmp(token->value, "JG8") == 0)
+		else if (strcmp(token->value, "JBE8") == 0)
 		{
-			fprintf(fout, "\t\tERROR %s\n", token->value);
+			if (token->next != 0 && token->next->mode == '!')
+			{
+				fprintf(fout, "\t\tif (_flags <= 0) goto %s;\n", token->next->value);
+				token = token->next;
+			}
+			else
+				fprintf(fout, "\t\tERROR %s\n", token->value);
 		}
 		else if (strcmp(token->value, "JL32") == 0)
 		{
@@ -405,9 +449,9 @@ int main(int argc, char *argv[])
 				_eax_int_80 = -1;
 			if (token->next != 0 && token->next->mode == '%')
 			{
-				fprintf(fout, "\t\t_%s = 0x%08x;\n", vars, atoi(token->next->value));
+				fprintf(fout, "\t\t_%s = 0x%08x;\n", vars, toNumber(token->next->value));
 				if (strcmp(vars, "eax") == 0)
-					_eax_int_80 = atoi(token->next->value);
+					_eax_int_80 = toNumber(token->next->value);
 				token = token->next;
 			}
 			else if (token->next != 0 && token->next->mode == '&')
@@ -444,7 +488,13 @@ int main(int argc, char *argv[])
 		}
 		else if (match(token->value, "SHRI8_???", vars))
 		{
-			fprintf(fout, "\t\t_%s = _%s >> 1;\n", vars, vars);
+			if (token->next != 0 && token->next->mode == '!')
+			{
+				fprintf(fout, "\t\t_%s = _%s >> %d;\n", vars, vars, toNumber(token->next->value));
+				token = token->next;
+			}
+			else
+				fprintf(fout, "\t\t// ERROR %s", token->value);
 		}
 		else if (match(token->value, "STORE32_Absolute32_???", vars))
 		{

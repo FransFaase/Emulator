@@ -307,6 +307,7 @@ int main(int argc, char *argv[])
 	const char *s_if = ident_string("if");
 	const char *s_star = characters['*'];
 	const char *s_backslash = characters['\\'];
+	const char *s_true = ident_string("true");
 	
 	addFunction(ident_string("_start"));
 	
@@ -336,7 +337,6 @@ int main(int argc, char *argv[])
 		else
 		{
 			printf("Found\n");
-			const char *prev_goto = 0; 
 			for (;;)
 			{
 				while (line2 != 0 && line2->tokens == 0)
@@ -366,8 +366,6 @@ int main(int argc, char *argv[])
 					printf("\n");
 					break;
 				}
-				
-				const char *last_goto = 0;
 				
 				Token *token1 = line1->tokens;
 				Token *token2 = line2->tokens;
@@ -412,7 +410,8 @@ int main(int argc, char *argv[])
 						{
 							if (token1->type == 'n' && token2->type == 'n')
 							{
-								if (strcmp(token1->text, "252") != 0 || strcmp(token2->text, "-4") != 0)
+								if (   (strcmp(token1->text, "252") != 0 || strcmp(token2->text, "-4") != 0)
+								    && (strcmp(token1->text, "255") != 0 || strcmp(token2->text, "-1") != 0))
 									break;
 							}
 							else
@@ -449,9 +448,6 @@ int main(int argc, char *argv[])
 							function_call = token2->text;
 						
 						prev_text = token1->text;
-						
-						if (token2->text == s_goto && token2->next != 0)
-							last_goto = token2->next->text;
 					}
 				}
 				//printf("\n");
@@ -472,24 +468,21 @@ int main(int argc, char *argv[])
 					line1->print(stdout);
 					line2->print(stdout);
 					/**/
-					if (prev_goto == 0)
+					if (   line1->tokens != 0 && line1->tokens->type == 'i'
+						&& line1->tokens->next != 0 && line1->tokens->next->text == s_colon)
 					{
-						//printf("No prev_goto\n");
-					}
-					else
-					{
-						//printf(" Prev goto %s\n", prev_goto);
 						bool found = false;
 						for (Line *pos_line2 = line2; !found && !end_of_function(pos_line2); pos_line2 = pos_line2->next)
-							if (   pos_line2->tokens != 0 && pos_line2->tokens->text == prev_goto
-								&& pos_line2->tokens->next != 0 && pos_line2->tokens->next->text == s_colon)
+							if (   pos_line2->tokens != 0 && pos_line2->tokens->type == 'i'
+								&& pos_line2->tokens->next != 0 && pos_line2->tokens->next->text == s_colon
+								&& getMatch(label_matches, pos_line2->tokens->text) == line1->tokens->text
+								)
 							{
 								found = true;
 								line2 = pos_line2;
 							}
 						if (found)
 						{
-							prev_goto = 0;
 							continue;
 						}
 					}
@@ -512,7 +505,6 @@ int main(int argc, char *argv[])
 				line2->matching = line1;
 				line1 = line1->next;
 				line2 = line2->next;
-				prev_goto = last_goto;
 			}
 		}
 	}

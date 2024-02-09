@@ -106,6 +106,7 @@ struct FunctionCall
 struct Statement
 {
 	int function_enter;
+	bool dyn_func;
 	int label_pos;
 	bool is_loop;
 	char kind;
@@ -114,11 +115,13 @@ struct Statement
 	uint16_t val16;
 	byte val8;
 	FunctionCall *func_calls;
+	const char *call_reg;
 	char gen_state;
 	
 	Statement()
 	{
 		function_enter = 0;
+		dyn_func = false;
 		label_pos = 0;
 		is_loop = false;
 		code = 0;
@@ -126,11 +129,13 @@ struct Statement
 		val16 = 0;
 		val8 = 0;
 		func_calls = 0;
+		call_reg = 0;
 	}
 
-	void call(uint32_t addr)
+	void call(uint32_t addr, const char *reg = 0)
 	{
 		kind = 'c';
+		call_reg = reg;
 		for (FunctionCall *func_call = func_calls; func_call != 0; func_call = func_call->next)
 			if (func_call->addr == addr)
 				return;
@@ -196,7 +201,7 @@ void start_inst(uint32_t pc)
 		cur_stat->val32 = _pc = J; \
 		if (do_trace) trace("  => jump to %08x\n\n", _pc); \
 	}
-#define CODE_CALL(X) cur_stat->call(X)
+#define CODE_CALL(X,R) cur_stat->call(X,R)
 #define CODE_RETURN cur_stat->kind = 'r'
 #define CODE_INT cur_stat->kind = 'i'; cur_stat->val32 = _eax
 
@@ -590,6 +595,8 @@ void generate_code(Process *process)
 	fprintf(fout, "\n");
 	
 
+	bool dyn_call = false;
+
 	for (uint32_t i = 0; i < len; i++)
 	{
 		Statement *stat = statements[i];
@@ -656,17 +663,32 @@ void generate_code(Process *process)
 					}
 					else if (stat->kind == 'c')
 					{
-						if (stat->func_calls != 0 && stat->func_calls->next == 0)
+						if (stat->call_reg == 0)
 						{
-							uint32_t index = stat->func_calls->addr - start_code;
-							if (index >= len || statements[index] == 0)
-								fprintf(fout, "/* Jump ERROR %08x %08x */", stat->val32, index);
+							if (stat->func_calls != 0 && stat->func_calls->next == 0)
+							{
+								uint32_t index = stat->func_calls->addr - start_code;
+								if (index >= len || statements[index] == 0)
+									fprintf(fout, "/* Jump ERROR %08x %08x */", stat->val32, index);
+								else
+									fprintf(fout, "%s;\t\t\t\t\t%s();", stat->code, name_for_function(stat->func_calls->addr, statements[index]->function_enter));
+							}
 							else
-								fprintf(fout, "%s;\t\t\t\t\t%s();", stat->code, name_for_function(stat->func_calls->addr, statements[index]->function_enter));
+								fprintf(fout, "/* ERROR call */");
 						}
 						else
-							fprintf(fout, "/* ERROR call */");
-						
+						{
+							dyn_call = true;
+							for (FunctionCall *func_call = stat->func_calls; func_call != 0; func_call = func_call->next)
+							{
+								uint32_t index = func_call->addr - start_code;
+								if (index >= len || statements[index] == 0)
+									fprintf(fout, "/* Jump ERROR %08x %08x */", stat->val32, index);
+								else
+									statements[index]->dyn_func = true;
+							}
+							fprintf(fout, "%s;\t\t\t\t\t_call_reg(_%s);", stat->code, stat->call_reg);
+						}
 					}
 					else if (stat->kind == 'i')
 					{
@@ -741,6 +763,20 @@ void generate_code(Process *process)
 		}
 	}
 	fprintf(fout, "private:\n");
+	if (dyn_call)
+	{
+		fprintf(fout, "\tvoid _call_reg(uint32_t addr)\n");
+		fprintf(fout, "\t{\n");
+		for (uint32_t i = 0; i < len; i++)
+		{
+			Statement *stat = statements[i];
+			if (stat != 0 && stat->dyn_func)
+				fprintf(fout, "\t\tif (addr == 0x%08x) { %s(); return; }\n", start_code + i, name_for_function(start_code + i, stat->function_enter));
+		}
+		
+		fprintf(fout, "\t\tprintf(\"Error, no function for 0x%%08x\\n\", addr); exit(1);\n"); 
+		fprintf(fout, "\t}\n\n");
+	}
 	fprintf(fout, "\tuint64_t val64;\n");
 	fprintf(fout, "\tuint32_t val32;\n");
 	fprintf(fout, "\tuint16_t val16;\n");
@@ -765,7 +801,7 @@ void generate_code(Process *process)
 	fprintf(fout, "\t\n");
 	fprintf(fout, "\t\n");
 	fprintf(fout, "\tMyProcessor processor(main_process);\n");
-	fprintf(fout, "\tprocessor.func1();\n");
+	fprintf(fout, "\tprocessor.%s();\n", name_for_function(start_code, 1));
 	fprintf(fout, "	\n");
 	fprintf(fout, "\treturn 0;\n");
 	fprintf(fout, "}\n");
@@ -1552,7 +1588,7 @@ public:
 							break;
 
 						case 0xD3:
-							CODE(_flags = _edx - _ebx);
+							CODE(_flags = _ebx - _edx);
 							if (do_trace) trace(" cmp_ebx,edx\n");
 							break;
 
@@ -2609,7 +2645,7 @@ public:
 					{
 						int32_t offset = (int32_t)getLongPC();
 						CODE(_process->push(_pc));
-						CODE_CALL(_pc + offset);
+						CODE_CALL(_pc + offset, 0);
 						_pc += offset;
 						if (do_trace) trace(" call %s\n\n", name_for_function(_pc, -1));
 						indent_depth += 2;
@@ -2675,7 +2711,7 @@ public:
 					{
 						case 0xD0:
 							CODE(_process->push(_pc));
-							CODE_CALL(_eax);
+							CODE_CALL(_eax, "eax");
 							_pc = _eax;
 							if (do_trace) trace(" call_eax %08x\n\n", _pc);
 							indent_depth += 2;
