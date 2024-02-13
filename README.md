@@ -98,7 +98,7 @@ After a lot of work, I finally was able to fix the bug in the `Emulator.cpp` tha
 the emulation of `cc_x86` to produced difference with respect to offsets of members in
 struct and unions. The problem was with some CMP-instruction having their arguments
 swapped. I fixed the problem with the help of [17.2.1 ModR/M and SIB Bytes](https://pdos.csail.mit.edu/6.828/2008/readings/i386/s17_02.htm).
-The commit with the fix is [b7a80666](https://github.com/FransFaase/Emulator/commit/b7a80666401e575e173ca5773555275a5293e0b1}
+The commit with the fix is [b7a80666](https://github.com/FransFaase/Emulator/commit/b7a80666401e575e173ca5773555275a5293e0b1)
 
 It now stops at the execution of `M1-0` because this an ELF file with a section containing
 symbolic information. This requires some additional work on the Emulator to process these.
