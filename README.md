@@ -92,3 +92,13 @@ two types of generated program. This program is called `sdiff.cpp`. While workin
 I discovered that no code is generated for the call on EAX-register instruction. These
 can be found in the commit [9fe05336](https://github.com/FransFaase/Emulator/commit/9fe0533698686a062b678217cce3b0eb3f5c8778).
 
+## Fixed bug
+
+After a lot of work, I finally was able to fix the bug in the `Emulator.cpp` that caused
+the emulation of `cc_x86` to produced difference with respect to offsets of members in
+struct and unions. The problem was with some CMP-instruction having their arguments
+swapped. I fixed the problem with the help of [17.2.1 ModR/M and SIB Bytes](https://pdos.csail.mit.edu/6.828/2008/readings/i386/s17_02.htm).
+The commit with the fix is [b7a80666](https://github.com/FransFaase/Emulator/commit/b7a80666401e575e173ca5773555275a5293e0b1}
+
+It now stops at the execution of `M1-0` because this an ELF file with a section containing
+symbolic information. This requires some additional work on the Emulator to process these.
