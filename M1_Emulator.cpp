@@ -288,6 +288,9 @@ int main(int argc, char *argv[])
 			else
 				fprintf(fout, "\t\tERROR %s\n", token->value);
 		}
+		else if (strcmp(token->value, "CMP_ECX_EBX") == 0) fprintf(fout, "\t\t_flags = _ebx - _ecx\n");
+		else if (strcmp(token->value, "CMP_EBX_ECX") == 0) fprintf(fout, "\t\t_flags = _ecx - _ebx\n");
+		else if (strcmp(token->value, "CMP_EDI_ESI") == 0) fprintf(fout, "\t\t_flags = _esi - _edi\n");
 		else if (match(token->value, "CMP_???_???", vars))
 		{
 			fprintf(fout, "\t\t_flags = _%3.3s - _%3.3s;\n", vars, vars + 3);

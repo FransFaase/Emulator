@@ -809,7 +809,18 @@ void generate_code(Process *process)
 	fclose(fout);
 }
 
-
+void output_function_addresses()
+{
+	FILE *fout = fopen("functions_out.txt", "w");
+	
+	for (uint32_t i = 0; i < end_code - start_code; i++)
+	{
+		Statement *stat = statements[i];
+		if (stat != 0 && stat->function_enter > 0)
+			fprintf(fout, "%08x %s\n", start_code + i, name_for_function(start_code + i, stat->function_enter));
+	}
+	fclose(fout);
+}
 
 Process *processes = 0;
 
@@ -1568,42 +1579,42 @@ public:
 					}
 					break;
 
-				case 0x39:
+				case 0x39: // CMP r/m32 r32
 					opcode = getPC();
 					switch(opcode)
 					{
-						case 0xC3:
+						case 0xC3: // 11 000 EAX 011 EBX 
 							CODE(_flags = _ebx - _eax);
 							if (do_trace) trace(" cmp_ebx,eax\n");
 							break;
 
-						case 0xC8:
+						case 0xC8: //11 001 ECX 000 EAX CMP_EAX_ECX
 							CODE(_flags = _eax - _ecx);
 							if (do_trace) trace(" cmp_eax,ecx\n");
 							break;
 
-						case 0xCB:
-							CODE(_flags = _ecx - _ebx);
+						case 0xCB: // 11 001 ECX 011 EBX CMP_ECX_EBX
+							CODE(_flags = _ebx - _ecx);
 							if (do_trace) trace(" cmp_ecx,ebx\n");
 							break;
 
-						case 0xD3:
+						case 0xD3: // 11 010 EDX 011 EBX CMP_EBX_EDX
 							CODE(_flags = _ebx - _edx);
 							if (do_trace) trace(" cmp_ebx,edx\n");
 							break;
 
-						case 0xD8:
+						case 0xD8: // 11 011 EBX 000 EAX CMP_EAX_EBX
 							CODE(_flags = _eax - _ebx);
 							if (do_trace) trace(" cmp_eax,ebx\n");
 							break;
 
-						case 0xD9:
-							CODE(_flags = _ebx - _ecx);
+						case 0xD9: // 11 011 EBX 001 ECX CMP_EBX_ECX
+							CODE(_flags = _ecx - _ebx);
 							if (do_trace) trace(" cmp_ebx,ecx\n");
 							break;
 
-						case 0xFE:
-							CODE(_flags = _edi - _esi);
+						case 0xFE: // 11 111 EDI 110 ESI CMP_EDI_ESI
+							CODE(_flags = _esi - _edi);
 							if (do_trace) trace(" cmp_edi,esi\n");
 							break;
 
@@ -2790,6 +2801,7 @@ public:
 		if (do_gen)
 		{
 			generate_code(_process);
+			output_function_addresses();
 			do_gen = false;
 			statements = 0;
 			return false;
@@ -3031,13 +3043,13 @@ public:
 		_edi = 0;
 		_ebp = 0;
 		printf("Start running process %d\n", _process->nr);
-		if (_process->nr == 15)
+		if (_process->nr == 20)
 		{
 			//do_trace = true;
 			//out_trace = true;
 			//trace_mem = true;
 		}
-		if (_process->nr == 15)
+		if (false && _process->nr == 20)
 		{
 			read_function_names();
 			init_statements(_process->start_code, _process->end_code);
