@@ -29,6 +29,7 @@ int indent_depth = 0;
 void indent(FILE *fout) { fprintf(fout, "%*.*s", indent_depth, indent_depth, ""); }
 
 bool do_trace = false;
+bool do_trace_call = false;
 bool out_trace = false;
 int nr_ret;
 bool trace_mem = false;
@@ -250,6 +251,20 @@ File *getFile(const char *name)
 	return file;
 }
 
+class FunctionName
+{
+public:
+	uint32_t addr;
+	char name[50];
+	FunctionName *next;
+	FunctionName(uint32_t a, char *n, FunctionName *nn)
+	{
+		addr = a;
+		strcpy(name, n);
+		next = nn;
+	}
+};
+
 
 class Process
 {
@@ -280,9 +295,11 @@ public:
 	
 	Usage *uses;
 	
+	FunctionName *functionNames;
+	
 	Process *next;
 	
-	Process(Process *_parent = 0) : parent(_parent), uses(0), next(0)
+	Process(Process *_parent = 0) : parent(_parent), uses(0), functionNames(0), next(0)
 	{
 		name = "";
 		
@@ -323,6 +340,12 @@ public:
 					free(memory[i][j]);
 				free(memory[i]);
 			}
+		for (FunctionName *functionName = functionNames; functionName != 0;)
+		{
+			FunctionName *next = functionName->next;
+			delete functionName;
+			functionName = next;
+		}
 	}
 
 	void init(int argc, char *argv[], char *env[])
@@ -338,10 +361,11 @@ public:
 		while (env[nr_env] != 0)
 			nr_env++;
 		
-		push(0);	
+		push(0);
 		for (int i = nr_env - 1; i >= 0; i--)
 		{
 			push(p);
+			//printf("Env at %08x: %08x %s\n", sp - 4, p, env[i]);
 			for (int j = 0; ; j++)
 			{
 				storeByte(p++, env[i][j]);
@@ -354,6 +378,7 @@ public:
 		for (int i = argc - 1; i >= 0; i--)
 		{
 			push(p);
+			//printf("Arg at %08x: %08x %s\n", sp - 4, p, argv[i]);
 			for (int j = 0; ; j++)
 			{
 				storeByte(p++, argv[i][j]);
@@ -361,6 +386,7 @@ public:
 					break;
 			}
 		}
+		//printf("Nr arg at: %08x %x\n", sp - 4, argc);
 		push(argc);
 	}
 	
@@ -434,7 +460,7 @@ public:
 	{
 		sp -= 4;
 		if (trace_mem) printf("push %08x to %08x\n", value, sp);
-		if (do_trace) trace("push %08x to %08x\n", value, sp);
+		if (do_trace && !trace_mem) trace("push %08x to %08x\n", value, sp);
 		_storeByte(sp    , (byte)value);
 		_storeByte(sp + 1, (byte)(value >> 8));
 		_storeByte(sp + 2, (byte)(value >> 16));
@@ -454,7 +480,7 @@ public:
 		value |= ((uint32_t)_loadByte(sp + 2)) << 16;
 		value |= ((uint32_t)_loadByte(sp + 3)) << 24;
 		if (trace_mem) printf("pop %08x from %08x\n", value, sp);
-		if (do_trace) trace("pop %08x from %08x\n", value, sp);
+		if (do_trace && !trace_mem) trace("pop %08x from %08x\n", value, sp);
 		sp += 4;
 		
 		return value;
@@ -470,25 +496,34 @@ public:
 			storeByte(++brk, 0);
 		return true;
 	}
-};
 
-class FunctionName
-{
-public:
-	uint32_t addr;
-	char name[50];
-	FunctionName *next;
-	FunctionName(uint32_t a, char *n, FunctionName *nn)
+	char *name_for_function(uint32_t addr, int function_enter)
 	{
-		addr = a;
-		strcpy(name, n);
-		next = nn;
+		//printf("name for function %08x %d\n", addr, function_enter);
+		for (FunctionName *fn = functionNames; fn != 0; fn = fn->next)
+			if (fn->addr == addr)
+				return fn->name;
+		static char buffer[100];
+		if (function_enter == -1)
+			sprintf(buffer, "%x", addr);
+		else
+			sprintf(buffer, "func%d", function_enter);
+		return buffer;
+	}
+	
+	char *name_for_addr(uint32_t addr)
+	{
+		for (FunctionName *fn = functionNames; fn != 0; fn = fn->next)
+			if (fn->addr == addr)
+				return fn->name;
+		return 0;
 	}
 };
-FunctionName *functionNames = 0;
 
-void read_function_names()
+FunctionName* read_function_names()
 {
+	FunctionName *functionNames = 0;
+
 	FILE *ffn = fopen("functions.txt", "r");
 	if (ffn != 0)
 	{
@@ -511,20 +546,7 @@ void read_function_names()
 		}
 		fclose(ffn);
 	}
-}
-
-char *name_for_function(uint32_t addr, int function_enter)
-{
-	printf("name for function %08x %d\n", addr, function_enter);
-	for (FunctionName *fn = functionNames; fn != 0; fn = fn->next)
-		if (fn->addr == addr)
-			return fn->name;
-	static char buffer[100];
-	if (function_enter == -1)
-		sprintf(buffer, "%x", addr);
-	else
-		sprintf(buffer, "func%d", function_enter);
-	return buffer;
+	return functionNames;
 }
 
 void replace_with_val(FILE *fout, const char *code, const char *parm, uint32_t val, const char *fmt)
@@ -607,8 +629,8 @@ void generate_code(Process *process)
 					statements[j]->gen_state = ' ';
 			stat->gen_state = 'g';
 					
-			fprintf(fout, "\tvoid %s()\n\t{\n", name_for_function(start_code + i, stat->function_enter));
-			fprintf(fout, "\t\tindent += 2; if (trace_func) printf(\"%%*.*s%s\\n\", indent, indent, \"\");\n", name_for_function(start_code + i, stat->function_enter));
+			fprintf(fout, "\tvoid %s()\n\t{\n", process->name_for_function(start_code + i, stat->function_enter));
+			fprintf(fout, "\t\tindent += 2; if (trace_func) printf(\"%%*.*s%s\\n\", indent, indent, \"\");\n", process->name_for_function(start_code + i, stat->function_enter));
 			for (int labels_to_go = 1; labels_to_go > 0; )
 			{
 				bool output = false;
@@ -628,15 +650,19 @@ void generate_code(Process *process)
 					
 					if (stat->label_pos > 0)
 					{
-						fprintf(fout, "\t\tlabel%d: _print_label(%d);%s\n", stat->label_pos, stat->label_pos, stat->is_loop ? " // loop" : "");
+						fprintf(fout, "\t\tlabel%d: _print_label(%d);%s", stat->label_pos, stat->label_pos, stat->is_loop ? " // loop" : "");
 						if (stat->gen_state == 'g')
 							labels_to_go--;
+						char *label = process->name_for_addr(start_code + k);
+						if (label != 0)
+							fprintf(fout, " // %s", label);
+						fprintf(fout, "\n");
 						stat->gen_state = 'D';
 					}
 
 					if (stat->function_enter > 0 && stat->gen_state == ' ')
 					{
-						fprintf(fout, "\t\t\t\t\t\t\t%s();\n", name_for_function(start_code + k, stat->function_enter));
+						fprintf(fout, "\t\t\t\t\t\t\t%s();\n", process->name_for_function(start_code + k, stat->function_enter));
 						fprintf(fout, "\t\tif (trace_func) _print_return();\n\t\tindent -= 2; return; \n");  
 						output = false;
 						continue;
@@ -671,7 +697,7 @@ void generate_code(Process *process)
 								if (index >= len || statements[index] == 0)
 									fprintf(fout, "/* Jump ERROR %08x %08x */", stat->val32, index);
 								else
-									fprintf(fout, "%s;\t\t\t\t\t%s();", stat->code, name_for_function(stat->func_calls->addr, statements[index]->function_enter));
+									fprintf(fout, "%s;\t\t\t\t\t%s();", stat->code, process->name_for_function(stat->func_calls->addr, statements[index]->function_enter));
 							}
 							else
 								fprintf(fout, "/* ERROR call */");
@@ -752,6 +778,9 @@ void generate_code(Process *process)
 									fprintf(fout, "\" */ ");
 								}
 							}
+							char *name = process->name_for_addr(stat->val32);
+							if (name != 0)
+								fprintf(fout, "/* %s */", name);
 						}
 						else
 							fprintf(fout, "%s;", stat->code);
@@ -771,7 +800,7 @@ void generate_code(Process *process)
 		{
 			Statement *stat = statements[i];
 			if (stat != 0 && stat->dyn_func)
-				fprintf(fout, "\t\tif (addr == 0x%08x) { %s(); return; }\n", start_code + i, name_for_function(start_code + i, stat->function_enter));
+				fprintf(fout, "\t\tif (addr == 0x%08x) { %s(); return; }\n", start_code + i, process->name_for_function(start_code + i, stat->function_enter));
 		}
 		
 		fprintf(fout, "\t\tprintf(\"Error, no function for 0x%%08x\\n\", addr); exit(1);\n"); 
@@ -801,7 +830,7 @@ void generate_code(Process *process)
 	fprintf(fout, "\t\n");
 	fprintf(fout, "\t\n");
 	fprintf(fout, "\tMyProcessor processor(main_process);\n");
-	fprintf(fout, "\tprocessor.%s();\n", name_for_function(start_code, 1));
+	fprintf(fout, "\tprocessor.%s();\n", process->name_for_function(start_code, 1));
 	fprintf(fout, "	\n");
 	fprintf(fout, "\treturn 0;\n");
 	fprintf(fout, "}\n");
@@ -809,7 +838,7 @@ void generate_code(Process *process)
 	fclose(fout);
 }
 
-void output_function_addresses()
+void output_function_addresses(Process *process)
 {
 	FILE *fout = fopen("functions_out.txt", "w");
 	
@@ -817,7 +846,7 @@ void output_function_addresses()
 	{
 		Statement *stat = statements[i];
 		if (stat != 0 && stat->function_enter > 0)
-			fprintf(fout, "%08x %s\n", start_code + i, name_for_function(start_code + i, stat->function_enter));
+			fprintf(fout, "%08x %s\n", start_code + i, process->name_for_function(start_code + i, stat->function_enter));
 	}
 	fclose(fout);
 }
@@ -955,6 +984,11 @@ public:
 		return result;
 	}
 	
+	byte readByte(uint32_t &i)
+	{
+		return data[i++];
+	}
+	
 	uint32_t readLong(uint32_t &i)
 	{
 		uint32_t result = 0;
@@ -998,15 +1032,11 @@ bool loadELF(ProgramFile *file, Process *process)
 		fprintf(stderr, "Program header = %08x\n", phoff);
 		return false;
 	}
-	uint32_t section_header = file->readLong(i);
-	if (section_header != 0)
+	uint32_t shoff = file->readLong(i);
+	uint32_t e_flags = file->readLong(i);
+	if (e_flags != 0)
 	{
-		fprintf(stderr, "Section header = %08x\n", section_header);
-		return false;
-	}
-	if (file->readLong(i) != 0)
-	{
-		fprintf(stderr, "e_flags = %08x\n", section_header);
+		fprintf(stderr, "e_flags = %08x\n", e_flags);
 		return false;
 	}
 	unsigned short ehsize = file->readShort(i);
@@ -1027,9 +1057,10 @@ bool loadELF(ProgramFile *file, Process *process)
 		fprintf(stderr, "phnum = %04x\n", phnum);
 		return false;
 	}
-	/*unsigned short shentsize =*/ file->readShort(i);
-	/*unsigned short shnum =*/ file->readShort(i);
-	/*unsigned short shstrndx =*/ file->readShort(i);
+
+	unsigned short shentsize = file->readShort(i);
+	unsigned short shnum = file->readShort(i);
+	unsigned short shstrndx = file->readShort(i);
 
 	uint32_t from_file = ehsize + phentsize * phnum;
 	
@@ -1075,19 +1106,144 @@ bool loadELF(ProgramFile *file, Process *process)
 			return false;
 		}
 		
-		uint32_t to_mem = ph_vaddr + from_file;
-		process->start_code = to_mem;
-		for (uint32_t j = 0; j < ph_filesz; j++)
+		if (shoff == 0)
 		{
-			//printf("Load byte from %08x: %02x ", from_file, file->data[from_file]);
-			process->storeByte(to_mem, file->data[from_file]);
-			//printf("Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
-			from_file++;
-			to_mem++;
+			uint32_t to_mem = ph_vaddr + from_file;
+			process->start_code = to_mem;
+			for (uint32_t j = 0; j < ph_filesz; j++)
+			{
+				//printf("Load byte from %08x: %02x ", from_file, file->data[from_file]);
+				process->storeByte(to_mem, file->data[from_file]);
+				//printf("Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
+				from_file++;
+				to_mem++;
+			}
+			process->end_code = to_mem;
+			process->brk = to_mem;
+			process->increase_brk(to_mem);
 		}
-		process->end_code = to_mem;
-		process->brk = to_mem;
-		process->increase_brk(to_mem);
+	}
+
+	if (shoff != 0)
+	{
+		uint32_t shstrtab_addr = shoff + shstrndx * shentsize + 16;
+		uint32_t shstrtab = file->readLong(shstrtab_addr);
+		fprintf(stderr, "%08x\n", shstrtab);
+		 
+		for (uint32_t is = 0; is < shnum; is++)
+		{
+			uint32_t off = shoff + is * shentsize;
+			fprintf(stderr, "Section info at %08x: ", off);
+			uint32_t sh_name = file->readLong(off);
+			uint32_t sh_type = file->readLong(off);
+			uint32_t sh_flags = file->readLong(off);
+			uint32_t sh_addr = file->readLong(off);
+			uint32_t sh_offset = file->readLong(off);
+			uint32_t sh_size = file->readLong(off);
+			uint32_t sh_link = file->readLong(off);
+			uint32_t sh_info = file->readLong(off);
+			uint32_t sh_addralign = file->readLong(off);
+			uint32_t sh_entsize = file->readLong(off);
+			
+			char name[11];
+			{
+				int i = 0;
+				for (uint32_t s = shstrtab + sh_name;;)
+				{
+					byte ch = file->readByte(s);
+					if (ch == 0)
+						break;
+					if (i < 10)
+						name[i++] = ch;
+				}
+				name[i] = '\0';
+			}
+			fprintf(stderr, "%-10s ", name);
+			
+			if (sh_type == 0x0) // SHT_NULL
+			{
+				fprintf(stderr, "NULL     %08x %08x %08x %02x %08x %d %d %d\n",
+					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
+			}
+			else if (sh_type == 0x1) // SHT_PROGBITS
+			{
+				fprintf(stderr, "PROGBITS %08x %08x %08x %02x %08x %d %d %d\n",
+					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
+				
+				uint32_t section_end = file->length;
+				if (is + 1 < shnum)
+				{
+					uint32_t next_addr = shoff + (is + 1) * shentsize + 16;
+					section_end = file->readLong(next_addr);
+				}			
+				
+				uint32_t to_mem = sh_addr;
+				uint32_t from_file = sh_offset;
+				process->start_code = to_mem;
+				for (uint32_t from_file = sh_offset; from_file < section_end; from_file++)
+				{
+					//printf("Load byte from %08x: %02x ", from_file, file->data[from_file]);
+					process->storeByte(to_mem, file->data[from_file]);
+					//printf("Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
+					to_mem++;
+				}
+				fprintf(stderr, "from_file: %08x to_mem: %08x\n", from_file, to_mem);
+				process->end_code = to_mem;
+				process->brk = to_mem;
+				process->increase_brk(to_mem);
+			}
+			else if (sh_type == 0x2) // SHT_SYMTAB
+			{
+				fprintf(stderr, "SYMTAB   %08x %08x %08x %02x %08x %d %d %d\n",
+					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
+				
+				uint32_t strtab_addr = shoff + sh_link * shentsize + 16;
+				uint32_t strtab = file->readLong(strtab_addr);
+				
+				
+				for (int i = 0; i < sh_info; i++)
+				{
+					uint32_t off = sh_offset + i * sh_entsize;
+					uint32_t st_name = file->readLong(off);
+					uint32_t st_value = file->readLong(off);
+					uint32_t st_size = file->readLong(off);
+					byte st_info = file->readByte(off);
+					byte st_other = file->readByte(off);
+					byte st_shndx1 = file->readByte(off);
+					byte st_shndx2 = file->readByte(off);
+
+					char symname[101];
+					{
+						int i = 0;
+						for (uint32_t s = strtab + st_name;;)
+						{
+							byte ch = file->readByte(s);
+							if (ch == 0)
+								break;
+							if (i < 100)
+								symname[i++] = ch;
+						}
+						symname[i] = '\0';
+					}
+
+					//fprintf(stderr, "%08x %08x %08x %02x %02x %02x %02x '%s'\n",
+					//	st_name, st_value, st_size, st_info, st_other, st_shndx1, st_shndx2, symname);
+					//fprintf(stderr, "%08x %s\n", st_value, symname);
+
+					process->functionNames = new FunctionName(st_value, symname, process->functionNames);
+				}
+			}
+			else if (sh_type == 0x3) // SHT_STRTAB
+			{
+				fprintf(stderr, "STRTAB   %08x %08x %08x %02x %08x %d %d %d\n",
+					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
+			}
+			else
+			{
+				fprintf(stderr, "sh_type %08x is not supported\n", sh_type);
+				return false;
+			}
+		}
 	}
 	
 	return true;
@@ -2658,7 +2814,8 @@ public:
 						CODE(_process->push(_pc));
 						CODE_CALL(_pc + offset, 0);
 						_pc += offset;
-						if (do_trace) trace(" call %s\n\n", name_for_function(_pc, -1));
+						if (do_trace) trace(" call %s\n\n", _process->name_for_function(_pc, -1));
+						else if (do_trace_call) trace(" call %s\n", _process->name_for_function(_pc, -1));
 						indent_depth += 2;
 					}
 					break;
@@ -2801,7 +2958,7 @@ public:
 		if (do_gen)
 		{
 			generate_code(_process);
-			output_function_addresses();
+			output_function_addresses(_process);
 			do_gen = false;
 			statements = 0;
 			return false;
@@ -3043,19 +3200,19 @@ public:
 		_edi = 0;
 		_ebp = 0;
 		printf("Start running process %d\n", _process->nr);
-		if (_process->nr == 20)
+		if (_process->nr == -1)
 		{
 			//do_trace = true;
 			//out_trace = true;
 			//trace_mem = true;
 		}
-		if (false && _process->nr == 20)
+		if (_process->nr == -1)
 		{
-			read_function_names();
+			_process->functionNames = read_function_names();
 			init_statements(_process->start_code, _process->end_code);
 			start_pc = _process->pc;
 		}
-		
+
 		return true;
 	}
 	
@@ -3086,6 +3243,7 @@ public:
 		print_trace(stdout);
 		printf("Unknown opcode in %s\n", _process->name);
 	}
+
 
 protected:
 	byte getPC()
@@ -3196,7 +3354,7 @@ int main(int argc, char *argv[])
 	Process *main_process = mainProcess(argc, argv);
 	if (main_process == 0)
 		return 0;
-		
+
 	Processor processor(main_process);
 	processor.run();
 	
