@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <string.h>
 #include <stdarg.h>
+#include <sys/stat.h>
 
 char *copystr(const char *v)
 {
@@ -728,7 +729,10 @@ void generate_code(Process *process)
 							case 0x06: fprintf(fout, "int_close_file();"); break;
 							case 0x07: fprintf(fout, "int_wait_pid();"); break;
 							case 0x0B: fprintf(fout, "if (!int_execve()) exit(1);"); break;
+							case 0x0C: fprintf(fout, "int_chdir();"); break;
+							case 0x0F: fprintf(fout, "int_chmod();"); break;
 							case 0x13: fprintf(fout, "int_lseek();"); break;
+							case 0x21: fprintf(fout, "int_access();"); break;
 							case 0x2D: fprintf(fout, "int_sys_brk();"); break;
 							default:   fprintf(fout, "// unhandled int80 %d", stat->val32); break;
 						}
@@ -935,9 +939,48 @@ void Process::finish()
 		}
 }
 
+char cd_path[200] = "";
 
+void add_cd_path(char *filename)
+{
+	if (cd_path[0] == '\0')
+		return;
+	fprintf(stderr, "add_cd_path %s %s =>", cd_path, filename);
+	char buf[500];
+	strcpy(buf, cd_path);
+	int i = strlen(buf);
+	char *f = filename;
+	if (strncmp(f, "./", 2) == 0)
+		f += 2;
+	for (;i > 0;)
+	{
+		if (strncmp(f, "../", 3) == 0)
+		{
+			i--;
+			while (i > 0 && buf[i-1] != '/')
+				i--;
+			f += 3;
+		}
+		else if (i >= 3 && strncmp(buf + i - 3, "../", 3) == 0)
+		{
+			char *s = f;
+			while (*s != '\0' && *s != '/')
+				s++;
+			if (*s == '\0')
+				break;
+			i -= 3;
+			f = s + 1;
+		}
+		else
+			break;
+	}
+	strcpy(buf + i, f);
+	strcpy(filename, buf);
+	fprintf(stderr, " %s\n", filename);
+}
 
 char *root_dir = 0;
+
 char *name_in_root(const char *name)
 {
 	static char fullname[500];
@@ -2935,9 +2978,21 @@ public:
 				if (!int_execve())
 					return false;
 				break;
+
+			case 0x0c:
+				int_chdir();
+				break;
+					
+			case 0x0f:
+				int_chmod();
+				break;
 					
 			case 0x13:
 				int_lseek();
+				break;
+				
+			case 0x21:
+				int_access();
 				break;
 				
 			case 0x2D:
@@ -2989,14 +3044,8 @@ public:
 	void int_open_file()
 	{
 		char filename[500];
-		uint32_t is = _ebx;
-		for (int i = 0; i < 499; i++, is++)
-		{
-			char ch = _process->loadByte(is);
-			filename[i] = ch;
-			if (ch == '\0')
-				break;
-		}
+		loadString(_ebx, filename, 500);
+		add_cd_path(filename);
 		File *file = getFile(filename);
 		bool read_only = (_ecx & O_ACCMODE) == O_RDONLY;
 		Usage *usage = new Usage(file, _process);
@@ -3007,14 +3056,14 @@ public:
 			
 		if (file->path == 0)
 			file->path = copystr(read_only ? name_in_root(filename) : file->name);
-		printf(" Open ProgramFile %s %x %x =>", file->path, _ecx, _edx);
-		int fh = open(file->path, _ecx, _edx);
-		printf(" %d\n", fh);
+		printf(" Open ProgramFile %s %o %o =>", file->path, _ecx, _edx);
+		int fh = open(file->path, _ecx & ~(uint32_t)O_EXCL, _edx);
+		printf(" %d", fh);
 		if (fh <= 0)
 		{
-			printf(" errno %d\n", errno);
-			exit(0);
+			printf(" (errno %d)", errno);
 		}
+		printf("\n");
 		file->fh = fh;
 		_eax = fh;
 	}
@@ -3114,12 +3163,7 @@ public:
 	bool int_execve()
 	{
 		char prog_name[500];
-		for (int i = 0; i < 500; i++)
-		{
-			prog_name[i] = _process->loadByte(_ebx + i);
-			if (prog_name[i] == 0)
-				break;
-		}
+		loadString(_ebx, prog_name, 500);
 
 		printf(" execve\n  |%s| ebx: %08x ecx: %08x edx: %08x\n", prog_name, _ebx, _ecx, _edx);
 		
@@ -3171,6 +3215,7 @@ public:
 			env[j] = copystr(arg);
 		}
 		
+		add_cd_path(prog_name);
 		File *file = getFile(prog_name);
 		Usage *usage = new Usage(file, _process);
 		usage->is_exec(0);
@@ -3216,10 +3261,45 @@ public:
 		return true;
 	}
 	
+	void int_chdir()
+	{
+		char filename[500];
+		loadString(_ebx, filename, 500);
+		int len = strlen(filename);
+		if (len == 0 || filename[len-1] != '/')
+		{
+			filename[len] = '/';
+			filename[len+1] = '\0';
+		}
+		if (do_trace) trace(" chdir(\"%s\") ", filename);
+		add_cd_path(filename);
+		strcpy(cd_path, filename);
+		if (do_trace) trace("new path: %s\n", cd_path);
+	}
+	
+	void int_chmod()
+	{
+		char filename[500];
+		loadString(_ebx, filename, 500);
+		if (do_trace) trace(" chmod(\"%s\", %x)\n", filename, _ecx);
+		_eax = chmod(filename, _ecx);
+	}
+	
 	void int_lseek()
 	{
 		if (do_trace) trace(" lseek\n");
 		_eax = lseek(_ebx, _ecx, _edx);
+	}
+	
+	void int_access()
+	{
+		char filename[500];
+		loadString(_ebx, filename, 500);
+		add_cd_path(filename);
+		File *file = getFile(filename);
+		if (file->path == 0)
+			file->path = copystr(file->name);
+		_eax = access(file->path, _ecx);
 	}
 	
 	void int_sys_brk()
@@ -3267,6 +3347,18 @@ protected:
 		return val;
 	}
 	
+	void loadString(uint32_t addr, char *str, int len)
+	{
+		for (int i = 0; i < len-1; i++, addr++)
+		{
+			char ch = _process->loadByte(addr);
+			str[i] = ch;
+			if (ch == '\0')
+				return;
+		}
+		str[len-1] = '\0';
+	}
+	
 	void set_al(byte val) { _eax = (_eax & 0xffffff00L) | (uint32_t)val; if (do_trace) trace(" eax = %08x\n", _eax); } 
 	void set_bl(byte val) { _ebx = (_ebx & 0xffffff00L) | (uint32_t)val; if (do_trace) trace(" ebx = %08x\n", _ebx); } 
 	void set_cl(byte val) { _ecx = (_ecx & 0xffffff00L) | (uint32_t)val; if (do_trace) trace(" ecx = %08x\n", _ecx); } 
@@ -3309,7 +3401,6 @@ public:
 
 };
 
-
 Process *mainProcess(int argc, char *argv[])
 {
 	if (argc < 3)
@@ -3349,6 +3440,8 @@ Process *mainProcess(int argc, char *argv[])
 
 
 #ifndef INCLUDED
+void test_add_cd_path();
+
 int main(int argc, char *argv[])
 {
 	Process *main_process = mainProcess(argc, argv);
@@ -3360,4 +3453,45 @@ int main(int argc, char *argv[])
 	
 	return 0;	
 }
+
+void test_add_cd_path()
+{
+	char filename[500];
+	
+	strcpy(filename, "test/");
+	add_cd_path(filename);
+	strcpy(cd_path, filename);
+	printf(" '%s'\n", cd_path);
+	
+	strcpy(filename, "../");
+	add_cd_path(filename);
+	strcpy(cd_path, filename);
+	printf(" '%s'\n", cd_path);
+	
+	strcpy(filename, "../");
+	add_cd_path(filename);
+	strcpy(cd_path, filename);
+	printf(" '%s'\n", cd_path);
+	
+	strcpy(filename, "test/");
+	add_cd_path(filename);
+	strcpy(cd_path, filename);
+	printf(" '%s'\n", cd_path);
+
+	strcpy(filename, "a/b/c/");
+	add_cd_path(filename);
+	strcpy(cd_path, filename);
+	printf(" '%s'\n", cd_path);
+
+	strcpy(filename, "../../");
+	add_cd_path(filename);
+	strcpy(cd_path, filename);
+	printf(" '%s'\n", cd_path);
+	
+	strcpy(filename, "../../");
+	add_cd_path(filename);
+	strcpy(cd_path, filename);
+	printf(" '%s'\n", cd_path);
+}
+
 #endif
