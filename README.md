@@ -102,3 +102,10 @@ The commit with the fix is [b7a80666](https://github.com/FransFaase/Emulator/com
 
 It now stops at the execution of `M1-0` because this an ELF file with a section containing
 symbolic information. This requires some additional work on the Emulator to process these.
+
+## M2-Planet and M2-Mesoplanet
+
+With commit [544ab04c](https://github.com/FransFaase/Emulator/commit/544ab04cdb603fc64cccd6a828912d67cd528761)
+the `M2-Planet` and `M2-Mesoplanet` are correctly generated, but the execution of these
+executables to build the extra MesCC tools, does not work, resulting in empty executables.
+
