@@ -542,7 +542,7 @@ FunctionName* read_function_names()
 			while (len > 0 && s[len-1] < ' ')
 				len--;
 			s[len] = '\0';
-			printf("%08x %s\n", a, s);
+			// printf("%08x %s\n", a, s);
 			functionNames = new FunctionName(a, s, functionNames);  
 		}
 		fclose(ffn);
@@ -2974,7 +2974,11 @@ public:
 				int_wait_pid();
 				break;
 			
-			case 0x0B:
+			case 0x0a:
+				int_unlink();
+				break;
+				
+			case 0x0b:
 				if (!int_execve())
 					return false;
 				break;
@@ -3057,7 +3061,7 @@ public:
 		if (file->path == 0)
 			file->path = copystr(read_only ? name_in_root(filename) : file->name);
 		printf(" Open ProgramFile %s %o %o =>", file->path, _ecx, _edx);
-		int fh = open(file->path, _ecx & ~(uint32_t)O_EXCL, _edx);
+		int fh = open(file->path, _ecx, _edx);
 		printf(" %d", fh);
 		if (fh <= 0)
 		{
@@ -3086,10 +3090,28 @@ public:
 	void int_wait_pid()
 	{
 		_eax = 0;
+		if (_ecx != 0)
+			_process->storeDWord(_ecx, 0);
+	}
+	
+	void int_unlink()
+	{
+		char filename[500];
+		loadString(_ebx, filename, 500);
+		add_cd_path(filename);
+		unlink(filename);
 	}
 	
 	void int_fork()
 	{
+		if (do_gen)
+		{
+			generate_code(_process);
+			output_function_addresses(_process);
+			do_gen = false;
+			statements = 0;
+			exit(1);
+		}
 		_process->pc = _pc;
 		_process->_ebx = _ebx;
 		_process->_ecx = _ecx;
