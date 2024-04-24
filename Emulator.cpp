@@ -356,38 +356,41 @@ public:
 		this->argv = argv;
 		this->env = env;
 		
-		uint32_t p = 4;
-		
 		int nr_env = 0;
 		while (env[nr_env] != 0)
 			nr_env++;
 		
-		push(0);
+		uint32_t *addrs = new uint32_t[argc + nr_env + 2];
+		int v = 0;
+
+		// Push environment in reverse order on the stack
+		addrs[v++] = 0;
 		for (int i = nr_env - 1; i >= 0; i--)
 		{
-			push(p);
-			//printf("Env at %08x: %08x %s\n", sp - 4, p, env[i]);
-			for (int j = 0; ; j++)
-			{
-				storeByte(p++, env[i][j]);
-				if (env[i][j] == 0)
-					break;
-			}
+			for (int j = strlen(env[i]); j >= 0; j--)
+				pushByte(env[i][j]);
+			addrs[v++] = sp;
 		}
 		
-		push(0);
+		// Push arguments in reverse order on the stack
+		addrs[v++] = 0;
 		for (int i = argc - 1; i >= 0; i--)
 		{
-			push(p);
-			//printf("Arg at %08x: %08x %s\n", sp - 4, p, argv[i]);
-			for (int j = 0; ; j++)
-			{
-				storeByte(p++, argv[i][j]);
-				if (argv[i][j] == 0)
-					break;
-			}
+			for (int j = strlen(argv[i]); j >= 0; j--)
+				pushByte(argv[i][j]);
+			addrs[v++] = sp;
 		}
-		//printf("Nr arg at: %08x %x\n", sp - 4, argc);
+
+		// Align stack pointer to double word boundary
+		while (sp % 4 != 0)
+			pushByte(0);
+		
+		// Push the collected addresses to the stack
+		for (int i = 0; i < v; i++)
+			push(addrs[i]);
+		delete[] addrs;
+
+		// Push argc to the stack
 		push(argc);
 	}
 	
@@ -466,6 +469,14 @@ public:
 		_storeByte(sp + 1, (byte)(value >> 8));
 		_storeByte(sp + 2, (byte)(value >> 16));
 		_storeByte(sp + 3, (byte)(value >> 24));
+	}
+	
+	void pushByte(byte value)
+	{
+		sp--;
+		if (trace_mem) printf("push %08x to %08x\n", value, sp);
+		if (do_trace && !trace_mem) trace("push %08x to %08x\n", value, sp);
+		_storeByte(sp, value);
 	}
 	
 	uint32_t pop()

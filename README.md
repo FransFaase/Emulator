@@ -111,4 +111,5 @@ executables to build the extra MesCC tools, does not work, resulting in empty ex
 
 ## Compiling mescc-tools and mescc-tools-extra
 
-With commit [2914a15d](https://github.com/FransFaase/Emulator/commit/2914a15d2304caa9af5fca65c7f24a25d2271d51) the `mescc-tools` and `mescc-tools-extra` do compile correct by `M2-Planet` and `M2-Mesoplanet`.
+With commit [2914a15d](https://github.com/FransFaase/Emulator/commit/2914a15d2304caa9af5fca65c7f24a25d2271d51)
+the `mescc-tools` and `mescc-tools-extra` do compile correct by `M2-Planet` and `M2-Mesoplanet`.
