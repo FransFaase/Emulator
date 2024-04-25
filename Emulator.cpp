@@ -215,6 +215,8 @@ void start_inst(uint32_t pc)
 class Process;
 class Usage;
 
+char *root_dir = 0;
+
 class File
 {
 public:
@@ -223,7 +225,7 @@ public:
 
 	int nr;
 	
-	bool is_source;
+	bool path_in_source;
 	bool produced;
 	Process *produced_by;
 	bool exec;
@@ -236,9 +238,50 @@ public:
 
 	File *next;
 	
-	File(const char *fn, int _nr) : path(0), nr(_nr), is_source(false), produced(false), produced_by(0), exec(false), used_as_input(0), removed(0), fh(-1), usages(0), next(0)
+	File(const char *fn, int _nr) : path(0), nr(_nr), path_in_source(false), produced(false), produced_by(0), exec(false), used_as_input(0), removed(0), fh(-1), usages(0), next(0)
 	{
 		name = copystr(fn);
+	}
+	
+	void setPath(bool read_only)
+	{
+		static char fullname[500];
+		if (read_only)
+		{
+			if (path == 0)
+			{
+				// Find path in source
+				strcpy(fullname, root_dir);
+				strcat(fullname, "seed/");
+				strcat(fullname, name);
+				if (access(fullname, R_OK) != 0)
+				{
+					strcpy(fullname, root_dir);
+					strcat(fullname, "seed/stage0-posix/");
+					strcat(fullname, name);
+				}
+				path = copystr(fullname);
+				
+				path_in_source = true;
+			}
+		}
+		else if (path == 0 || path_in_source)
+		{
+			strcpy(fullname, "result/");
+			strcat(fullname, name);
+			path = copystr(fullname);
+			
+			for (char *s = fullname; *s != '\0'; s++)
+				if (*s == '/')
+				{
+					*s = '\0';
+					if (access(fullname, F_OK) == -1)
+						mkdir(fullname, 0700);
+					*s = '/';
+				}
+			path_in_source = false;
+		}
+		printf("File %s mapped on %s\n", name, path);
 	}
 };
 
@@ -247,6 +290,10 @@ File *files = 0;
 File *getFile(const char *name)
 {
 	static int nr = 1;
+	if (name[0] == '.' && name[1] == '/')
+		name += 2;
+	else if (name[0] == '/')
+		name++;
 	File **ref_file = &files;
 	for (; *ref_file != 0; ref_file = &(*ref_file)->next)
 		if (strcmp((*ref_file)->name, name) == 0)
@@ -514,7 +561,7 @@ public:
 	{
 		if (sp == 0L)
 		{
-			fprintf(stderr, "Stack underflow\n");
+			fprintf(stdout, "Stack underflow\n");
 			exit(-1);
 		}
 		uint32_t value = *(uint32_t*)(memory[(uint16_t)(sp >> 16)] + (sp & 0xffff));
@@ -985,7 +1032,7 @@ void add_cd_path(char *filename)
 {
 	if (cd_path[0] == '\0')
 		return;
-	fprintf(stderr, "add_cd_path %s %s =>", cd_path, filename);
+	fprintf(stdout, "add_cd_path %s %s =>", cd_path, filename);
 	char buf[500];
 	strcpy(buf, cd_path);
 	int i = strlen(buf);
@@ -1016,19 +1063,7 @@ void add_cd_path(char *filename)
 	}
 	strcpy(buf + i, f);
 	strcpy(filename, buf);
-	fprintf(stderr, " %s\n", filename);
-}
-
-char *root_dir = 0;
-
-char *name_in_root(const char *name)
-{
-	static char fullname[500];
-	strcpy(fullname, root_dir);
-	if (name[0] == '.' && name[1] == '/')
-		name += 2;
-	strcat(fullname, name);
-	return fullname;
+	fprintf(stdout, " %s\n", filename);
 }
 
 class ProgramFile
@@ -1104,7 +1139,7 @@ bool loadELF(ProgramFile *file, Process *process)
 	for (; i < 24; i++)
 		if (signature[i] != file->data[i])
 		{
-			fprintf(stderr, "ELF signature %2d %02X %02X\n", i, signature[i], file->data[i]);
+			fprintf(stdout, "ELF signature %2d %02X %02X\n", i, signature[i], file->data[i]);
 			return false;
 		}
 	uint32_t pc = file->readLong(i);
@@ -1112,32 +1147,32 @@ bool loadELF(ProgramFile *file, Process *process)
 	uint32_t phoff = file->readLong(i);
 	if (phoff != 0x34)
 	{
-		fprintf(stderr, "Program header = %08x\n", phoff);
+		fprintf(stdout, "Program header = %08x\n", phoff);
 		return false;
 	}
 	uint32_t shoff = file->readLong(i);
 	uint32_t e_flags = file->readLong(i);
 	if (e_flags != 0)
 	{
-		fprintf(stderr, "e_flags = %08x\n", e_flags);
+		fprintf(stdout, "e_flags = %08x\n", e_flags);
 		return false;
 	}
 	unsigned short ehsize = file->readShort(i);
 	if (ehsize != 0x34)
 	{
-		fprintf(stderr, "ehsize = %04x\n", ehsize);
+		fprintf(stdout, "ehsize = %04x\n", ehsize);
 		return false;
 	}
 	unsigned short phentsize = file->readShort(i);
 	if (phentsize != 0x20)
 	{
-		fprintf(stderr, "phentsize = %04x\n", phentsize);
+		fprintf(stdout, "phentsize = %04x\n", phentsize);
 		return false;
 	}
 	unsigned short phnum = file->readShort(i);
 	if (phnum != 1)
 	{
-		fprintf(stderr, "phnum = %04x\n", phnum);
+		fprintf(stdout, "phnum = %04x\n", phnum);
 		return false;
 	}
 
@@ -1160,32 +1195,32 @@ bool loadELF(ProgramFile *file, Process *process)
 		
 		if (ph_type != 1)
 		{
-			fprintf(stderr, "ph_type = %08x\n", ph_type);
+			fprintf(stdout, "ph_type = %08x\n", ph_type);
 			return false;
 		}
 		if (ph_offset != 0)
 		{
-			fprintf(stderr, "ph_offset = %08x\n", ph_offset);
+			fprintf(stdout, "ph_offset = %08x\n", ph_offset);
 			return false;
 		}
 		if (ph_vaddr != ph_physaddr)
 		{
-			fprintf(stderr, "ph_vaddr %08x %08x\n", ph_vaddr, ph_physaddr);
+			fprintf(stdout, "ph_vaddr %08x %08x\n", ph_vaddr, ph_physaddr);
 			return false;
 		}
 		if (ph_filesz != ph_memsz)
 		{
-			fprintf(stderr, "ph_vaddr %08x %08x\n", ph_filesz, ph_memsz);
+			fprintf(stdout, "ph_vaddr %08x %08x\n", ph_filesz, ph_memsz);
 			return false;
 		}
 		if (ph_flags != 7)
 		{
-			fprintf(stderr, "ph_flags = %08x\n", ph_flags);
+			fprintf(stdout, "ph_flags = %08x\n", ph_flags);
 			return false;
 		}
 		if (ph_align != 1)
 		{
-			fprintf(stderr, "ph_align = %08x\n", ph_align);
+			fprintf(stdout, "ph_align = %08x\n", ph_align);
 			return false;
 		}
 		
@@ -1211,12 +1246,12 @@ bool loadELF(ProgramFile *file, Process *process)
 	{
 		uint32_t shstrtab_addr = shoff + shstrndx * shentsize + 16;
 		uint32_t shstrtab = file->readLong(shstrtab_addr);
-		fprintf(stderr, "%08x\n", shstrtab);
+		fprintf(stdout, "%08x\n", shstrtab);
 		 
 		for (uint32_t is = 0; is < shnum; is++)
 		{
 			uint32_t off = shoff + is * shentsize;
-			fprintf(stderr, "Section info at %08x: ", off);
+			fprintf(stdout, "Section info at %08x: ", off);
 			uint32_t sh_name = file->readLong(off);
 			uint32_t sh_type = file->readLong(off);
 			uint32_t sh_flags = file->readLong(off);
@@ -1241,16 +1276,16 @@ bool loadELF(ProgramFile *file, Process *process)
 				}
 				name[i] = '\0';
 			}
-			fprintf(stderr, "%-10s ", name);
+			fprintf(stdout, "%-10s ", name);
 			
 			if (sh_type == 0x0) // SHT_NULL
 			{
-				fprintf(stderr, "NULL     %08x %08x %08x %02x %08x %d %d %d\n",
+				fprintf(stdout, "NULL     %08x %08x %08x %02x %08x %d %d %d\n",
 					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
 			}
 			else if (sh_type == 0x1) // SHT_PROGBITS
 			{
-				fprintf(stderr, "PROGBITS %08x %08x %08x %02x %08x %d %d %d\n",
+				fprintf(stdout, "PROGBITS %08x %08x %08x %02x %08x %d %d %d\n",
 					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
 				
 				uint32_t section_end = file->length;
@@ -1270,14 +1305,14 @@ bool loadELF(ProgramFile *file, Process *process)
 					//printf("Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
 					to_mem++;
 				}
-				fprintf(stderr, "from_file: %08x to_mem: %08x\n", from_file, to_mem);
+				fprintf(stdout, "from_file: %08x to_mem: %08x\n", from_file, to_mem);
 				process->end_code = to_mem;
 				process->brk = to_mem;
 				process->increase_brk(to_mem);
 			}
 			else if (sh_type == 0x2) // SHT_SYMTAB
 			{
-				fprintf(stderr, "SYMTAB   %08x %08x %08x %02x %08x %d %d %d\n",
+				fprintf(stdout, "SYMTAB   %08x %08x %08x %02x %08x %d %d %d\n",
 					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
 				
 				uint32_t strtab_addr = shoff + sh_link * shentsize + 16;
@@ -1309,21 +1344,21 @@ bool loadELF(ProgramFile *file, Process *process)
 						symname[i] = '\0';
 					}
 
-					//fprintf(stderr, "%08x %08x %08x %02x %02x %02x %02x '%s'\n",
+					//fprintf(stdout, "%08x %08x %08x %02x %02x %02x %02x '%s'\n",
 					//	st_name, st_value, st_size, st_info, st_other, st_shndx1, st_shndx2, symname);
-					//fprintf(stderr, "%08x %s\n", st_value, symname);
+					//fprintf(stdout, "%08x %s\n", st_value, symname);
 
 					process->functionNames = new FunctionName(st_value, symname, process->functionNames);
 				}
 			}
 			else if (sh_type == 0x3) // SHT_STRTAB
 			{
-				fprintf(stderr, "STRTAB   %08x %08x %08x %02x %08x %d %d %d\n",
+				fprintf(stdout, "STRTAB   %08x %08x %08x %02x %08x %d %d %d\n",
 					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
 			}
 			else
 			{
-				fprintf(stderr, "sh_type %08x is not supported\n", sh_type);
+				fprintf(stdout, "sh_type %08x is not supported\n", sh_type);
 				return false;
 			}
 		}
@@ -3099,9 +3134,7 @@ public:
 			usage->is_input(0);
 		else
 			usage->is_output(0);
-			
-		if (file->path == 0)
-			file->path = copystr(read_only ? name_in_root(filename) : file->name);
+		file->setPath(read_only);
 		printf(" Open ProgramFile %s %o %o =>", file->path, _ecx, _edx);
 		int fh = open(file->path, _ecx, _edx);
 		printf(" %d", fh);
@@ -3287,19 +3320,18 @@ public:
 		File *file = getFile(prog_name);
 		Usage *usage = new Usage(file, _process);
 		usage->is_exec(0);
-		if (file->path == 0)
-			file->path = copystr(name_in_root(prog_name));
+		file->setPath(/*read_only:*/true);
 		
 		ProgramFile program;
 		if (!program.open(file->path))
 		{
-			fprintf(stderr, "Could not read '%s'\n", file->path);
+			fprintf(stdout, "Could not read '%s'\n", file->path);
 			return false;
 		}
 		
 		if (!loadELF(&program, _process))
 		{
-			fprintf(stderr, "Failed to load '%s' as ELF\n", file->path);
+			fprintf(stdout, "Failed to load '%s' as ELF\n", file->path);
 			return false;
 		}
 		
@@ -3367,8 +3399,7 @@ public:
 		loadString(_ebx, filename, 500);
 		add_cd_path(filename);
 		File *file = getFile(filename);
-		if (file->path == 0)
-			file->path = copystr(file->name);
+		file->setPath(/*read_only*/ (_ecx & W_OK) == 0);
 		_eax = access(file->path, _ecx);
 	}
 	
@@ -3479,7 +3510,7 @@ Process *mainProcess(int argc, char *argv[])
 {
 	if (argc < 3)
 	{
-		fprintf(stderr, "No argument\n");
+		fprintf(stdout, "No argument\n");
 		return 0;
 	}
 
@@ -3490,19 +3521,18 @@ Process *mainProcess(int argc, char *argv[])
 	File *file = getFile(argv[2]);
 	Usage *usage = new Usage(file, main_process);
 	usage->is_exec(0);
-	if (file->path == 0)
-		file->path = copystr(name_in_root(argv[2]));
+	file->setPath(/*read_only*/true);
 
 	ProgramFile program;
 	if (!program.open(file->path))
 	{
-		fprintf(stderr, "Could not read '%s' ('%s')\n", argv[2], file->path);
+		fprintf(stdout, "Could not read '%s' ('%s')\n", argv[2], file->path);
 		return 0;
 	}
 	
 	if (!loadELF(&program, main_process))
 	{
-		fprintf(stderr, "Failed to load '%s' as ELF\n", argv[2]);
+		fprintf(stdout, "Failed to load '%s' as ELF\n", argv[2]);
 		return 0;
 	}
 	
