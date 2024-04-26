@@ -1,9 +1,22 @@
 # Emulator
-An i386 emulator for [live-bootstrap](https://github.com/fosslinux/live-bootstrap/).
+An i386 emulator for executing [live-bootstrap](https://github.com/fosslinux/live-bootstrap/)
+in order to analyze (and check) the live-bootstrap contents. The final goal is to
+produce a documentation similar to [this](https://www.iwriteiam.nl/livebootstrap.html),
+which is produced by [a program](https://www.iwriteiam.nl/livebootstrap.html#Parser)
+that parses the kaem files and output which files are read and produced. 
 
-I am developing an interpreter in order to analyze (and check) the live-bootstrap
-contents. I already wrote [a program](https://www.iwriteiam.nl/livebootstrap.html#Parser)
-to parse the kaem files and output which files are read and produced. 
+# Usage
+
+
+
+```
+./Emulator ../live-bootstrap/ bootstrap-seeds/POSIX/x86/kaem-optional-seed  kaem.x86
+```
+
+
+# Development history
+
+The most important development steps with pointer to commits.
 
 ## parsing hex0-seed
 
