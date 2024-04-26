@@ -212,6 +212,55 @@ void start_inst(uint32_t pc)
 #define CODE_RETURN cur_stat->kind = 'r'
 #define CODE_INT cur_stat->kind = 'i'; cur_stat->val32 = _eax
 
+
+#define MAX_NR_SKIP_PROCESSES 4000
+struct
+{
+	int nr;
+	int nr_sub_processes;
+} skipped_processes[MAX_NR_SKIP_PROCESSES];
+int nr_skipped_processes = 0;
+
+FILE *f_skip = 0;
+
+void init_skip_processes()
+{
+	FILE *f = fopen("skip_processes.txt", "r");
+	if (f != 0)
+	{
+		char buffer[40];
+		while (fgets(buffer, 39, f))
+		{
+			sscanf(buffer, "%d %d",
+				&skipped_processes[nr_skipped_processes].nr, 
+				&skipped_processes[nr_skipped_processes].nr_sub_processes);
+			nr_skipped_processes++;
+		}
+		fclose(f);
+	}
+	f_skip = fopen("skip_processes_new.txt", "w");
+}
+
+bool skip_process(int nr, int &nr_sub_processes)
+{
+	for (int i = 0; i < nr_skipped_processes; i++)
+		if (skipped_processes[i].nr == nr)
+		{
+			nr_sub_processes = skipped_processes[i].nr_sub_processes;
+			return true;
+		}
+	return false;
+}
+
+void completed_process(int nr, int nr_sub_processes)
+{
+	if (f_skip != 0)
+	{
+		fprintf(f_skip, "%d %d\n", nr, nr_sub_processes);
+		fflush(f_skip);
+	}
+}
+
 class Process;
 class Usage;
 
@@ -259,6 +308,10 @@ public:
 					strcpy(fullname, root_dir);
 					strcat(fullname, "seed/stage0-posix/");
 					strcat(fullname, name);
+					if (access(fullname, R_OK) != 0)
+					{
+						strcpy(fullname, name);
+					}
 				}
 				path = copystr(fullname);
 				
@@ -336,6 +389,7 @@ public:
 	uint32_t end_code;
 	uint32_t brk;
 	Process *parent;
+	int nr_sub_processes;
 
 	// Saved registers
 	uint32_t _ebx;
@@ -352,11 +406,12 @@ public:
 	
 	Process *next;
 	
-	Process(Process *_parent = 0) : parent(_parent), uses(0), functionNames(0), next(0)
+	static int nr_of_processes;
+	
+	Process(Process *_parent = 0) : parent(_parent), nr_sub_processes(0), uses(0), functionNames(0), next(0)
 	{
 		name = "";
 		
-		static int nr_of_processes = 0;
 		nr = ++nr_of_processes;
 		
 		for (int i = 0; i < 0x10000; i++)
@@ -367,6 +422,8 @@ public:
 		
 		if (parent != 0)
 		{
+			for (Process *p = parent; p != 0; p = p->parent)
+				p->nr_sub_processes++;
 			pc = parent->pc;
 			sp = parent->sp;
 			end_code = parent->end_code;
@@ -607,6 +664,8 @@ public:
 		return 0;
 	}
 };
+
+int Process::nr_of_processes = 0;
 
 FunctionName* read_function_names()
 {
@@ -3100,24 +3159,12 @@ public:
 			return false;
 		}
 		// Exit
-		if (_process->parent == 0)
+		if (!_exit_process())
 			return false;
-		_process->finish();
-		_process = _process->parent;
-		_pc = _process->pc;
-		_ebx = _process->_ebx;
-		_ecx = _process->_ecx;
-		_edx = _process->_edx;
-		_esi = _process->_esi;
-		_edi = _process->_edi;
-		_ebp = _process->_ebp;
-		printf("ebp: %08x\n", _ebp);
-		_flags = _process->_flags;
 
 		if (out_trace)
 			return false;
 		printf("Continue executing process %d\n", _process->nr);
-		_eax = 1;
 
 		return true;
 	}	
@@ -3268,6 +3315,15 @@ public:
 
 		printf(" execve\n  |%s| ebx: %08x ecx: %08x edx: %08x\n", prog_name, _ebx, _ecx, _edx);
 		
+		int nr_sub_processes = 0;
+		if (skip_process(_process->nr, nr_sub_processes))
+		{
+			printf("Skip process %d\n", _process->nr);
+			_process->nr_sub_processes = nr_sub_processes;
+			Process::nr_of_processes += nr_sub_processes;
+			return _exit_process();
+		}
+		
 #define MAX_ARG_LEN 500
 		
 		int argc = 0;
@@ -3348,7 +3404,7 @@ public:
 		if (_process->nr == -1)
 		{
 #ifdef ENABLE_DO_TRACE
-			//do_trace = true;
+			do_trace = true;
 #endif
 			//out_trace = true;
 			//trace_mem = true;
@@ -3504,6 +3560,26 @@ public:
 		printf("\n");
 	}
 
+private:
+	bool _exit_process()
+	{
+		completed_process(_process->nr, _process->nr_sub_processes);
+		if (_process->parent == 0)
+			return false;
+		_process->finish();
+		_process = _process->parent;
+		_pc = _process->pc;
+		_eax = 1;
+		_ebx = _process->_ebx;
+		_ecx = _process->_ecx;
+		_edx = _process->_edx;
+		_esi = _process->_esi;
+		_edi = _process->_edi;
+		_ebp = _process->_ebp;
+		printf("ebp: %08x\n", _ebp);
+		_flags = _process->_flags;
+		return true;
+	}	
 };
 
 Process *mainProcess(int argc, char *argv[])
@@ -3548,6 +3624,8 @@ void test_add_cd_path();
 
 int main(int argc, char *argv[])
 {
+	init_skip_processes();
+	
 	Process *main_process = mainProcess(argc, argv);
 	if (main_process == 0)
 		return 0;
