@@ -1,4 +1,5 @@
 # Emulator
+
 An i386 emulator for executing [live-bootstrap](https://github.com/fosslinux/live-bootstrap/)
 in order to analyze (and check) the live-bootstrap contents. The final goal is to
 produce a documentation similar to [this](https://www.iwriteiam.nl/livebootstrap.html),
@@ -7,12 +8,22 @@ that parses the kaem files and output which files are read and produced.
 
 # Usage
 
-
-
+The first argument for the `Emulator` program is the path (terminated with a '/') to the folder where
+live-bootstrap is located. The remainder arguments are the executable and it arguments. When
+live-bootstrap is located in a sibling folder, the following command can be used:
 ```
 ./Emulator ../live-bootstrap/ bootstrap-seeds/POSIX/x86/kaem-optional-seed  kaem.x86
 ```
+The results of the execution will be placed in the `results` folder (and sub folders), which
+are automatically created.
 
+The program also produces the file `skip_processes_new.txt`. This can be used for incremental
+execution where steps that already have been executed succesful can be skipped. For this the contents
+of the file need to be copied to the file `skip_processes.txt` till the steps for which the
+execution has to continue. Note that the contents of the live-bootstrap folder are not modified.
+Files that are modified are placed in the `results` folder. The program always first searches
+for a file in the `results` folder, before looking in the live-bootstrap folder, it is possible
+that skipping steps could lead to incorrect results.
 
 # Development history
 
@@ -126,3 +137,12 @@ executables to build the extra MesCC tools, does not work, resulting in empty ex
 
 With commit [2914a15d](https://github.com/FransFaase/Emulator/commit/2914a15d2304caa9af5fca65c7f24a25d2271d51)
 the `mescc-tools` and `mescc-tools-extra` do compile correct by `M2-Planet` and `M2-Mesoplanet`.
+
+## Adapt to live-bootstrap of April 20, 2024
+
+At commit [d8fee0d7](https://github.com/FransFaase/Emulator/commit/d8fee0d7ea08a32d60bce791c840ff5ef6eae351)
+the following has been implemented:
+* Store command line arguments and environment variables on the stack
+* Some performance improvements with respect to  memory access.
+* Adapter for live-bootstrap commit [0e6133ee](https://github.com/fosslinux/live-bootstrap/commit/0e6133eed2a31a6bdaac03f2c1845a3908a2faff).
+* Implemented incremental execution.
