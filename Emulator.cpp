@@ -299,19 +299,28 @@ public:
 		{
 			if (path == 0)
 			{
-				// Find path in source
-				strcpy(fullname, root_dir);
-				strcat(fullname, "seed/");
-				strcat(fullname, name);
-				if (access(fullname, R_OK) != 0)
+				static const char *paths[] = { "replacement/", "result/", "*seed/", "*seed/stage0-posix/", "*"};
+				bool found = false;
+				for (int i = 0; i < sizeof(paths)/sizeof(paths[0]); i++)
 				{
-					strcpy(fullname, root_dir);
-					strcat(fullname, "seed/stage0-posix/");
-					strcat(fullname, name);
-					if (access(fullname, R_OK) != 0)
+					if (paths[i][0] == '*')
 					{
-						strcpy(fullname, name);
+						strcpy(fullname, root_dir);
+						strcat(fullname, paths[i] + 1);
 					}
+					else
+						strcpy(fullname, paths[i]);
+					strcat(fullname, name);
+					if (access(fullname, R_OK) == 0)
+					{
+						found = true;
+						break;
+					}
+				}
+				if (!found)
+				{
+					strcpy(fullname, "result/");
+					strcat(fullname, name);
 				}
 				path = copystr(fullname);
 				
