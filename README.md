@@ -17,13 +17,16 @@ live-bootstrap is located in a sibling directory, the following command can be u
 The results of the execution will be placed in the `results` directory (and sub directories), which
 are automatically created.
 
-The program also produces the file `skip_processes_new.txt`. This can be used for incremental
+The program also produces the files `skip_processes_new.txt` and `stat.txt`. This first can be used for incremental
 execution where steps that already have been executed succesful can be skipped. For this the contents
 of the file need to be copied to the file `skip_processes.txt` till the steps for which the
 execution has to continue. Note that the contents of the live-bootstrap directory are not modified.
 Files that are modified are placed in the `results` directory. The program always first searches
 for a file in the `results` directory, before looking in the live-bootstrap directory, it is possible
 that skipping steps could lead to incorrect results.
+
+The file `stat.txt` contains statistics about the parent-child relation between steps and
+which files are executed, read and/or written by each step.
 
 The `Emulator.cpp` program can generate tracing information. For this the preprocessor symbol `ENABLE_DO_TRACE`
 has to defined. At the end of the `Processor::int_execve` there is some conditions for enabling
@@ -174,9 +177,9 @@ to determine if the target was a directory or a file.
 The emulator now executed 228 steps and stops at loading the `m2-mes` file, because it has
 a different ELF header.
 
-## Next steps
+## Collecting statistics
 
-* Log statistics about which steps (processes) are execute, the parent-child relationship
-  between the steps, the files that are opened and how many bytes are read and written.
-* Fix loading the `m2-mes` file. (`objdump` shows some sensible information, so it looks
-  like the file is valid.)
+The commit [df322a8f](https://github.com/FransFaase/Emulator/commit/df322a8fc7cc3dfd9c7d7193afab3bf3c15f31f0)
+adds code to write the `stat.txt` file with information about the child-parent relationship
+between step (processes) and which files are executed, read and written.
+
