@@ -30,13 +30,13 @@ bool message_round = false;
 int indent_depth = 0;
 void indent(FILE *fout) { fprintf(fout, "%*.*s", indent_depth, indent_depth, ""); }
 
+FILE *log_file = stdout;
+FILE *stat_file = 0;
+
 #ifdef ENABLE_DO_TRACE
 #define DO_TRACE(...) if (do_trace) trace(__VA_ARGS__)
 bool do_trace = false;
 bool do_trace_call = false;
-#else
-#define DO_TRACE(...) 
-#endif
 bool out_trace = false;
 int nr_ret;
 bool trace_mem = false;
@@ -60,7 +60,7 @@ void trace(const char* format, ...)
 		vsnprintf(s, MAX_MESSAGE_LEN - 20, format, argp);
 	}
 	if (out_trace)
-		fprintf(stdout, "%s", messages[message_nr]);
+		fprintf(log_file, "%s", messages[message_nr]);
 	messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
 	if (++message_nr >= MAX_NR_MESSAGES)
 	{
@@ -78,7 +78,7 @@ void trace_ni(const char* format, ...)
 	vsnprintf(s, MAX_MESSAGE_LEN - indent_depth, format, argp);
 	messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
 	if (out_trace)
-		fprintf(stdout, "%s", messages[message_nr]);
+		fprintf(log_file, "%s", messages[message_nr]);
 	if (++message_nr >= MAX_NR_MESSAGES)
 	{
 		message_nr = 0;
@@ -89,14 +89,17 @@ void trace_ni(const char* format, ...)
 
 void print_trace(FILE *f)
 {
-	printf("---\n");
+	fprintf(log_file, "---\n");
 	if (message_round)
 		for (int i = message_nr; i < MAX_NR_MESSAGES; i++)
-			printf("%s", messages[i]);
+			fprintf(log_file, "%s", messages[i]);
 	for (int i = 0; i < message_nr; i++)
-		printf("%s", messages[i]);
-	printf("---\n");
+		fprintf(log_file, "%s", messages[i]);
+	fprintf(log_file, "---\n");
 }
+#else
+#define DO_TRACE(...) 
+#endif
 
 typedef unsigned char byte;
 
@@ -348,7 +351,7 @@ public:
 	{
 		if (mapped_path == 0 || (!read_only && mapped_in_source(mapped_path)))
 			mapped_path = copystr(map_file(name, read_only));
-		printf("File %s mapped on %s\n", name, mapped_path);
+		fprintf(log_file, "File %s mapped on %s\n", name, mapped_path);
 		return mapped_path;
 	}
 	
@@ -527,7 +530,7 @@ public:
 #if TRACE_MEMORY
 		byte result = memory[(uint16_t)(address >> 16)][(address & 0xffff)];
 		if (trace_mem)
-			printf("Load %02x from %08x\n", result, address);
+			fprintf(log_file, "Load %02x from %08x\n", result, address);
 		return result;
 #else
 		return memory[(uint16_t)(address >> 16)][(address & 0xffff)];
@@ -546,7 +549,7 @@ public:
 	{
 #if TRACE_MEMORY
 		if (trace_mem)
-			printf("Store %02x at %08x\n", value, address);
+			fprintf(log_file, "Store %02x at %08x\n", value, address);
 #endif
 		memory[(uint16_t)(address >> 16)][(address & 0xffff)] = value;
 	}
@@ -558,7 +561,7 @@ public:
 #if TRACE_MEMORY
 			uint32_t value = *(uint32_t*)(memory[(uint16_t)(address >> 16)] + (address & 0xffff));
 			if (trace_mem)
-				printf("Load %08x from %08x\n", value, address);
+				fprintf(log_file, "Load %08x from %08x\n", value, address);
 			return value;
 #else
 			return *(uint32_t*)(memory[(uint16_t)(address >> 16)] + (address & 0xffff));
@@ -574,7 +577,7 @@ public:
 		value |= memory[(uint16_t)(address >> 16)][(address & 0xffff)] << 24;
 #if TRACE_MEMORY
 		if (trace_mem)
-			printf("Load %08x from %08x\n", value, address);
+			fprintf(log_file, "Load %08x from %08x\n", value, address);
 #endif
 		return value;
 	}
@@ -583,7 +586,7 @@ public:
 	{
 #if TRACE_MEMORY
 		if (trace_mem)
-			printf("Store %08x at %08x\n", value, address);
+			fprintf(log_file, "Store %08x at %08x\n", value, address);
 #endif
 		if (address & 0x3 == 0)
 		{
@@ -608,7 +611,7 @@ public:
 	{
 		sp -= 4;
 #if TRACE_MEMORY
-		if (trace_mem) printf("push %08x to %08x\n", value, sp);
+		if (trace_mem) fprintf(log_file, "push %08x to %08x\n", value, sp);
 		else { DO_TRACE("push %08x to %08x\n", value, sp); }
 #endif
 		if (sp < _sp_allocated)
@@ -623,7 +626,7 @@ public:
 	{
 		sp--;
 #if TRACE_MEMORY
-		if (trace_mem) printf("push %08x to %08x\n", value, sp);
+		if (trace_mem) fprintf(log_file, "push %08x to %08x\n", value, sp);
 		else { DO_TRACE("push %08x to %08x\n", value, sp); }
 #endif
 		if (sp < _sp_allocated)
@@ -638,12 +641,12 @@ public:
 	{
 		if (sp == 0L)
 		{
-			fprintf(stdout, "Stack underflow\n");
+			fprintf(log_file, "Stack underflow\n");
 			exit(-1);
 		}
 		uint32_t value = *(uint32_t*)(memory[(uint16_t)(sp >> 16)] + (sp & 0xffff));
 #if TRACE_MEMORY
-		if (trace_mem) printf("pop %08x from %08x\n", value, sp);
+		if (trace_mem) fprintf(log_file, "pop %08x from %08x\n", value, sp);
 		else { DO_TRACE("pop %08x from %08x\n", value, sp); }
 #endif
 		sp += 4;
@@ -664,7 +667,7 @@ public:
 
 	char *name_for_function(uint32_t addr, int function_enter)
 	{
-		//printf("name for function %08x %d\n", addr, function_enter);
+		//fprintf(log_file, "name for function %08x %d\n", addr, function_enter);
 		for (FunctionName *fn = functionNames; fn != 0; fn = fn->next)
 			if (fn->addr == addr)
 				return fn->name;
@@ -708,7 +711,7 @@ FunctionName* read_function_names()
 			while (len > 0 && s[len-1] < ' ')
 				len--;
 			s[len] = '\0';
-			// printf("%08x %s\n", a, s);
+			// fprintf(log_file, "%08x %s\n", a, s);
 			functionNames = new FunctionName(a, s, functionNames);  
 		}
 		fclose(ffn);
@@ -797,7 +800,7 @@ void generate_code(Process *process)
 			stat->gen_state = 'g';
 					
 			fprintf(fout, "\tvoid %s()\n\t{\n", process->name_for_function(start_code + i, stat->function_enter));
-			fprintf(fout, "\t\tindent += 2; if (trace_func) printf(\"%%*.*s%s\\n\", indent, indent, \"\");\n", process->name_for_function(start_code + i, stat->function_enter));
+			fprintf(fout, "\t\tindent += 2; if (trace_func) fprintf(log_file, \"%%*.*s%s\\n\", indent, indent, \"\");\n", process->name_for_function(start_code + i, stat->function_enter));
 			for (int labels_to_go = 1; labels_to_go > 0; )
 			{
 				bool output = false;
@@ -983,11 +986,11 @@ void generate_code(Process *process)
 	fprintf(fout, "\n");
 	fprintf(fout, "\tbool trace_func;\n");
 	fprintf(fout, "\n");
-	fprintf(fout, "\tvoid _print_label(int n) { /* printf(\"%%*.*s- label%%d\\n\", indent, indent, \"\", n); */ }\n");
+	fprintf(fout, "\tvoid _print_label(int n) { /* fprintf(log_file, \"%%*.*s- label%%d\\n\", indent, indent, \"\", n); */ }\n");
 	fprintf(fout, "\tvoid _print_return()\n");
 	fprintf(fout, "\t{\n");
 	fprintf(fout, "\t\tprintf(\"%%*.*s=> %%d\", indent, indent, \"\", _eax);\n");
-	fprintf(fout, "\t\tif (' ' <= _eax && _eax < 127) printf(\" '%%c'\", _eax);\n");
+	fprintf(fout, "\t\tif (' ' <= _eax && _eax < 127) fprintf(log_file, \" '%%c'\", _eax);\n");
 	fprintf(fout, "\t\tprintf(\"\\n\");\n");
 	fprintf(fout, "\t}\n");
 	fprintf(fout, "};\n");
@@ -1095,24 +1098,25 @@ public:
 
 void Process::finish()
 {
-	printf("Close process\n");
+	fprintf(log_file, "Close process\n");
 	for (Usage *use = uses; use != 0; use = use->next_use)
 		if (use->file->fh >= 0)
 		{
-			printf(" Close file %s\n", use->file->mappedPath());
+			fprintf(log_file, " Close file %s\n", use->file->mappedPath());
 			close(use->file->fh);
 			use->file->fh = -1;
 		}
+	if (stat_file != 0) fflush(stat_file);
 }
 
 char cd_path[200] = "/";
 
 void add_cd_path(char *filename)
 {
-	fprintf(stdout, "add_cd_path %s %s => ", cd_path, filename);
+	fprintf(log_file, "add_cd_path %s %s => ", cd_path, filename);
 	if (filename[0] == '/')
 	{
-		fprintf(stdout, "%s\n", filename);
+		fprintf(log_file, "%s\n", filename);
 		return;
 	}
 	char buf[500];
@@ -1136,7 +1140,7 @@ void add_cd_path(char *filename)
 				f++;
 			while (i > 0 && buf[i-1] != '/')
 				i--;
-			while (i >= 0 && buf[i] == '/')
+			while (i > 0 && buf[i-1] == '/')
 				i--;
 		}
 		else
@@ -1150,7 +1154,7 @@ void add_cd_path(char *filename)
 	}
 	buf[i] = '\0';
 	strcpy(filename, buf);
-	fprintf(stdout, "%s\n", filename);
+	fprintf(log_file, "%s\n", filename);
 }
 
 class ProgramFile
@@ -1173,7 +1177,7 @@ public:
 		lseek(fh, 0L, SEEK_SET);
 		data = new byte[length];
 		length = read(fh, data, length);
-		printf("Length %08x\n", length);
+		fprintf(log_file, "Length %08x\n", length);
 		//for (uint32_t i = 0; i < length; i++)
 		//	DO_TRACE("%02X ", data[i]);
 		//DO_TRACE("\n");
@@ -1226,7 +1230,7 @@ bool loadELF(ProgramFile *file, Process *process)
 	for (; i < 24; i++)
 		if (signature[i] != file->data[i])
 		{
-			fprintf(stdout, "ELF signature %2d %02X %02X\n", i, signature[i], file->data[i]);
+			fprintf(log_file, "ELF signature %2d %02X %02X\n", i, signature[i], file->data[i]);
 			return false;
 		}
 	uint32_t pc = file->readLong(i);
@@ -1234,32 +1238,32 @@ bool loadELF(ProgramFile *file, Process *process)
 	uint32_t phoff = file->readLong(i);
 	if (phoff != 0x34)
 	{
-		fprintf(stdout, "Program header = %08x\n", phoff);
+		fprintf(log_file, "Program header = %08x\n", phoff);
 		return false;
 	}
 	uint32_t shoff = file->readLong(i);
 	uint32_t e_flags = file->readLong(i);
 	if (e_flags != 0)
 	{
-		fprintf(stdout, "e_flags = %08x\n", e_flags);
+		fprintf(log_file, "e_flags = %08x\n", e_flags);
 		return false;
 	}
 	unsigned short ehsize = file->readShort(i);
 	if (ehsize != 0x34)
 	{
-		fprintf(stdout, "ehsize = %04x\n", ehsize);
+		fprintf(log_file, "ehsize = %04x\n", ehsize);
 		return false;
 	}
 	unsigned short phentsize = file->readShort(i);
 	if (phentsize != 0x20)
 	{
-		fprintf(stdout, "phentsize = %04x\n", phentsize);
+		fprintf(log_file, "phentsize = %04x\n", phentsize);
 		return false;
 	}
 	unsigned short phnum = file->readShort(i);
 	if (phnum != 1)
 	{
-		fprintf(stdout, "phnum = %04x\n", phnum);
+		fprintf(log_file, "phnum = %04x\n", phnum);
 		return false;
 	}
 
@@ -1282,32 +1286,32 @@ bool loadELF(ProgramFile *file, Process *process)
 		
 		if (ph_type != 1)
 		{
-			fprintf(stdout, "ph_type = %08x\n", ph_type);
+			fprintf(log_file, "ph_type = %08x\n", ph_type);
 			return false;
 		}
 		if (ph_offset != 0)
 		{
-			fprintf(stdout, "ph_offset = %08x\n", ph_offset);
+			fprintf(log_file, "ph_offset = %08x\n", ph_offset);
 			return false;
 		}
 		if (ph_vaddr != ph_physaddr)
 		{
-			fprintf(stdout, "ph_vaddr %08x %08x\n", ph_vaddr, ph_physaddr);
+			fprintf(log_file, "ph_vaddr %08x %08x\n", ph_vaddr, ph_physaddr);
 			return false;
 		}
 		if (ph_filesz != ph_memsz)
 		{
-			fprintf(stdout, "ph_vaddr %08x %08x\n", ph_filesz, ph_memsz);
+			fprintf(log_file, "ph_vaddr %08x %08x\n", ph_filesz, ph_memsz);
 			return false;
 		}
 		if (ph_flags != 7)
 		{
-			fprintf(stdout, "ph_flags = %08x\n", ph_flags);
+			fprintf(log_file, "ph_flags = %08x\n", ph_flags);
 			return false;
 		}
 		if (ph_align != 1)
 		{
-			fprintf(stdout, "ph_align = %08x\n", ph_align);
+			fprintf(log_file, "ph_align = %08x\n", ph_align);
 			return false;
 		}
 		
@@ -1317,9 +1321,9 @@ bool loadELF(ProgramFile *file, Process *process)
 			process->start_code = to_mem;
 			for (uint32_t j = 0; j < ph_filesz; j++)
 			{
-				//printf("Load byte from %08x: %02x ", from_file, file->data[from_file]);
+				//fprintf(log_file, "Load byte from %08x: %02x ", from_file, file->data[from_file]);
 				process->storeAllocByte(to_mem, file->data[from_file]);
-				//printf("Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
+				//fprintf(log_file, "Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
 				from_file++;
 				to_mem++;
 			}
@@ -1333,12 +1337,12 @@ bool loadELF(ProgramFile *file, Process *process)
 	{
 		uint32_t shstrtab_addr = shoff + shstrndx * shentsize + 16;
 		uint32_t shstrtab = file->readLong(shstrtab_addr);
-		fprintf(stdout, "%08x\n", shstrtab);
+		fprintf(log_file, "%08x\n", shstrtab);
 		 
 		for (uint32_t is = 0; is < shnum; is++)
 		{
 			uint32_t off = shoff + is * shentsize;
-			fprintf(stdout, "Section info at %08x: ", off);
+			fprintf(log_file, "Section info at %08x: ", off);
 			uint32_t sh_name = file->readLong(off);
 			uint32_t sh_type = file->readLong(off);
 			uint32_t sh_flags = file->readLong(off);
@@ -1363,16 +1367,16 @@ bool loadELF(ProgramFile *file, Process *process)
 				}
 				name[i] = '\0';
 			}
-			fprintf(stdout, "%-10s ", name);
+			fprintf(log_file, "%-10s ", name);
 			
 			if (sh_type == 0x0) // SHT_NULL
 			{
-				fprintf(stdout, "NULL     %08x %08x %08x %02x %08x %d %d %d\n",
+				fprintf(log_file, "NULL     %08x %08x %08x %02x %08x %d %d %d\n",
 					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
 			}
 			else if (sh_type == 0x1) // SHT_PROGBITS
 			{
-				fprintf(stdout, "PROGBITS %08x %08x %08x %02x %08x %d %d %d\n",
+				fprintf(log_file, "PROGBITS %08x %08x %08x %02x %08x %d %d %d\n",
 					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
 				
 				uint32_t section_end = file->length;
@@ -1387,19 +1391,19 @@ bool loadELF(ProgramFile *file, Process *process)
 				process->start_code = to_mem;
 				for (uint32_t from_file = sh_offset; from_file < section_end; from_file++)
 				{
-					//printf("Load byte from %08x: %02x ", from_file, file->data[from_file]);
+					//fprintf(log_file, "Load byte from %08x: %02x ", from_file, file->data[from_file]);
 					process->storeAllocByte(to_mem, file->data[from_file]);
-					//printf("Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
+					//fprintf(log_file, "Stored at %08x: %02x\n", to_mem, process->loadByte(to_mem)); 
 					to_mem++;
 				}
-				fprintf(stdout, "from_file: %08x to_mem: %08x\n", from_file, to_mem);
+				fprintf(log_file, "from_file: %08x to_mem: %08x\n", from_file, to_mem);
 				process->end_code = to_mem;
 				process->brk = to_mem;
 				process->increase_brk(to_mem);
 			}
 			else if (sh_type == 0x2) // SHT_SYMTAB
 			{
-				fprintf(stdout, "SYMTAB   %08x %08x %08x %02x %08x %d %d %d\n",
+				fprintf(log_file, "SYMTAB   %08x %08x %08x %02x %08x %d %d %d\n",
 					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
 				
 				uint32_t strtab_addr = shoff + sh_link * shentsize + 16;
@@ -1431,21 +1435,21 @@ bool loadELF(ProgramFile *file, Process *process)
 						symname[i] = '\0';
 					}
 
-					//fprintf(stdout, "%08x %08x %08x %02x %02x %02x %02x '%s'\n",
+					//fprintf(log_file, "%08x %08x %08x %02x %02x %02x %02x '%s'\n",
 					//	st_name, st_value, st_size, st_info, st_other, st_shndx1, st_shndx2, symname);
-					//fprintf(stdout, "%08x %s\n", st_value, symname);
+					//fprintf(log_file, "%08x %s\n", st_value, symname);
 
 					process->functionNames = new FunctionName(st_value, symname, process->functionNames);
 				}
 			}
 			else if (sh_type == 0x3) // SHT_STRTAB
 			{
-				fprintf(stdout, "STRTAB   %08x %08x %08x %02x %08x %d %d %d\n",
+				fprintf(log_file, "STRTAB   %08x %08x %08x %02x %08x %d %d %d\n",
 					sh_addr, sh_offset, sh_size, sh_entsize, sh_flags, sh_link, sh_info, sh_addralign);
 			}
 			else
 			{
-				fprintf(stdout, "sh_type %08x is not supported\n", sh_type);
+				fprintf(log_file, "sh_type %08x is not supported\n", sh_type);
 				return false;
 			}
 		}
@@ -2960,8 +2964,10 @@ public:
 					CODE_RETURN;
 					DO_TRACE(" ret to %02x\n\n", _pc);
 					indent_depth -= 2;
+#ifdef ENABLE_DO_TRACE
 					if (out_trace && --nr_ret == 0)
 						out_trace = false;
+#endif
 					break;
 					
 				case 0xCD:
@@ -2976,8 +2982,10 @@ public:
 							break;
 						
 						default:
-						    print_trace(stdout);
-							printf("Unknown interupt %02x\n", opcode);
+#ifdef ENABLE_DO_TRACE
+						    print_trace(log_file);
+#endif
+							fprintf(log_file, "Unknown interupt %02x\n", opcode);
 							return;
 					}
 					break;
@@ -3007,8 +3015,10 @@ public:
 							break;
 							
 						default:
-						    print_trace(stdout);
-							printf("Unknown interupt %02x\n", opcode);
+#ifdef ENABLE_DO_TRACE
+						    print_trace(log_file);
+#endif
+							fprintf(log_file, "Unknown interupt %02x\n", opcode);
 							return;
 					}
 					break;
@@ -3020,7 +3030,7 @@ public:
 						CODE_CALL(_pc + offset, 0);
 						_pc += offset;
 						DO_TRACE(" call %s\n\n", _process->name_for_function(_pc, -1));
-#ifdef ENABLE_DO_TRACE						
+#ifdef ENABLE_DO_TRACE
 						if (do_trace_call && !do_trace) trace(" call %s\n", _process->name_for_function(_pc, -1));
 #endif
 						indent_depth += 2;
@@ -3176,8 +3186,10 @@ public:
 				break;
 				
 			default:
-			    print_trace(stdout);
-				printf("Unknown system call 0x%x (%d)\n", _eax, _eax);
+#ifdef ENABLE_DO_TRACE
+				print_trace(log_file);
+#endif
+				fprintf(log_file, "Unknown system call 0x%x (%d)\n", _eax, _eax);
 				return false;
 		}
 		
@@ -3198,9 +3210,11 @@ public:
 		if (!_exit_process())
 			return false;
 
+#ifdef ENABLE_DO_TRACE
 		if (out_trace)
 			return false;
-		printf("Continue executing process %d\n", _process->nr);
+#endif
+		fprintf(log_file, "Continue executing process %d\n", _process->nr);
 
 		return true;
 	}	
@@ -3218,16 +3232,17 @@ public:
 		else
 			usage->is_output(0);
 		const char *mapped_path = file->getMappedPath(read_only);
-		printf(" Open ProgramFile %s %o %o =>", mapped_path, _ecx, _edx);
+		fprintf(log_file, " Open ProgramFile %s %o %o =>", mapped_path, _ecx, _edx);
 		int fh = open(mapped_path, _ecx, _edx);
-		printf(" %d", fh);
+		fprintf(log_file, " %d", fh);
 		if (fh <= 0)
 		{
-			printf(" (errno %d)", errno);
+			fprintf(log_file, " (errno %d)", errno);
 		}
-		printf("\n");
+		fprintf(log_file, "\n");
 		file->fh = fh;
 		_eax = fh;
+		if (stat_file != 0) fprintf(stat_file, "%s %d %s\n", read_only ? "Read" : "Write", _process->nr, filename);
 	}
 	
 	void int_close_file()
@@ -3235,7 +3250,7 @@ public:
 		for (Usage *use = _process->uses; use != 0; use = use->next_use)
 			if (use->file->fh == (int)_ebx)
 			{
-				printf(" Close file %s\n", use->file->mappedPath());
+				fprintf(log_file, " Close file %s\n", use->file->mappedPath());
 				_eax = 0;
 				if (close(use->file->fh) < 0)
 					_eax = errno;
@@ -3277,9 +3292,10 @@ public:
 		_process->_esi = _esi;
 		_process->_edi = _edi;
 		_process->_ebp = _ebp;
-		printf("ebp: %08x\n", _ebp);
+		fprintf(log_file, "ebp: %08x\n", _ebp);
 		_process->_flags = _flags;
 		_process = newProcess(_process);
+		if (stat_file != 0) fprintf(stat_file, "Fork %d %d\n", _process->parent->nr, _process->nr);
 		_eax = 0;
 	}
 	
@@ -3349,12 +3365,12 @@ public:
 		char prog_name[500];
 		loadString(_ebx, prog_name, 500);
 
-		printf(" execve\n  |%s| ebx: %08x ecx: %08x edx: %08x\n", prog_name, _ebx, _ecx, _edx);
+		fprintf(log_file, " execve\n  |%s| ebx: %08x ecx: %08x edx: %08x\n", prog_name, _ebx, _ecx, _edx);
 		
 		int nr_sub_processes = 0;
 		if (skip_process(_process->nr, nr_sub_processes))
 		{
-			printf("Skip process %d\n", _process->nr);
+			fprintf(log_file, "Skip process %d\n", _process->nr);
 			_process->nr_sub_processes = nr_sub_processes;
 			Process::nr_of_processes += nr_sub_processes;
 			return _exit_process();
@@ -3380,7 +3396,7 @@ public:
 				if (arg[i] == 0)
 					break;
 			}
-			printf(" %d %08x |%s|\n", j, addr, arg);
+			fprintf(log_file, " %d %08x |%s|\n", j, addr, arg);
 			argv[j] = copystr(arg);
 		}
 		
@@ -3404,7 +3420,7 @@ public:
 				if (arg[i] == 0)
 					break;
 			}
-			printf(" env %d %08x |%s|\n", j, addr, arg);
+			fprintf(log_file, " env %d %08x |%s|\n", j, addr, arg);
 			env[j] = copystr(arg);
 		}
 		
@@ -3417,15 +3433,17 @@ public:
 		ProgramFile program;
 		if (!program.open(mapped_path))
 		{
-			fprintf(stdout, "Could not read '%s'\n", mapped_path);
+			fprintf(log_file, "Could not read '%s'\n", mapped_path);
 			return false;
 		}
 		
 		if (!loadELF(&program, _process))
 		{
-			fprintf(stdout, "Failed to load '%s' as ELF\n", file->mappedPath());
+			fprintf(log_file, "Failed to load '%s' as ELF\n", file->mappedPath());
 			return false;
 		}
+		
+		if (stat_file != 0) fprintf(stat_file, "Exec %d %s\n", _process->nr, prog_name);
 		
 		_process->init(argc, argv, env);
 		_pc = _process->pc;
@@ -3436,14 +3454,14 @@ public:
 		_esi = 0;
 		_edi = 0;
 		_ebp = 0;
-		printf("Start running process %d\n", _process->nr);
+		fprintf(log_file, "Start running process %d\n", _process->nr);
 		if (_process->nr == -1)
 		{
 #ifdef ENABLE_DO_TRACE
 			do_trace = true;
-#endif
 			//out_trace = true;
 			//trace_mem = true;
+#endif
 		}
 		if (_process->nr == -1)
 		{
@@ -3465,7 +3483,7 @@ public:
 		//	filename[len] = '/';
 		//	filename[len+1] = '\0';
 		//}
-		/*DO_TRACE*/printf(" chdir(\"%s\") ", filename);
+		DO_TRACE(" chdir(\"%s\") ", filename);
 		add_cd_path(filename);
 		if (filename[0] == '/' && filename[1] == '\0')
 		{
@@ -3474,11 +3492,11 @@ public:
 			return;
 		}
 		const char* mapped_path = map_file(filename, /*read_only*/true);
-		printf("mapped: %s ", mapped_path);
+		DO_TRACE("mapped: %s ", mapped_path);
 		struct stat sb;
 		if (stat(mapped_path, &sb) == 0 && S_ISDIR(sb.st_mode))
 		{
-			/*DO_TRACE*/printf("new path: %s\n", filename);
+			DO_TRACE("new path: %s\n", filename);
 			strcpy(cd_path, filename);
 			_eax = 0;
 		}
@@ -3518,7 +3536,7 @@ public:
 		char path[500];
 		strcpy(path, "result/");
 		strcat(path, filename);
-		printf("mkdir '%s' at '%s'\n", filename, path);
+		fprintf(log_file, "mkdir '%s' at '%s'\n", filename, path);
 		mkdir(path, _ecx);
 		_eax = 0;
 	}
@@ -3544,7 +3562,7 @@ public:
 		uint32_t buf_addr = _ebx;
 		uint32_t size = _ecx;
 		int cd_path_len = strlen(cd_path);
-		printf("int_getcwd %x %d '%s' %d\n", buf_addr, size, cd_path, cd_path_len); 
+		fprintf(log_file, "int_getcwd %x %d '%s' %d\n", buf_addr, size, cd_path, cd_path_len); 
 		if (size < cd_path_len + 1)
 			_eax = 0;
 		else
@@ -3565,15 +3583,17 @@ public:
 	
 	void unknownOpcode()
 	{
-		print_trace(stdout);
-		printf("Unknown opcode in %s\n", _process->name);
+#ifdef ENABLE_DO_TRACE
+		print_trace(log_file);
+#endif
+		fprintf(log_file, "Unknown opcode in %s\n", _process->name);
 	}
 
 
 protected:
 	byte getPC()
 	{
-#ifdef ENABLE_DO_TRACE	
+#ifdef ENABLE_DO_TRACE
 		byte v = _process->loadByte(_pc);
 		//DO_TRACE("pc = %08x %02x\n", _pc, v);
 		if (do_trace) trace_ni("%02x ", v);
@@ -3645,7 +3665,7 @@ public:
 				fprintf(fout, "\\%02X", b);
 			addr++;
 		}
-		printf("\n");
+		fprintf(log_file, "\n");
 	}
 
 private:
@@ -3664,7 +3684,7 @@ private:
 		_esi = _process->_esi;
 		_edi = _process->_edi;
 		_ebp = _process->_ebp;
-		printf("ebp: %08x\n", _ebp);
+		fprintf(log_file, "ebp: %08x\n", _ebp);
 		_flags = _process->_flags;
 		return true;
 	}	
@@ -3674,7 +3694,7 @@ Process *mainProcess(int argc, char *argv[])
 {
 	if (argc < 3)
 	{
-		fprintf(stdout, "No argument\n");
+		fprintf(log_file, "No argument\n");
 		return 0;
 	}
 
@@ -3690,13 +3710,13 @@ Process *mainProcess(int argc, char *argv[])
 	ProgramFile program;
 	if (!program.open(mapped_path))
 	{
-		fprintf(stdout, "Could not read '%s' ('%s')\n", argv[2], mapped_path);
+		fprintf(log_file, "Could not read '%s' ('%s')\n", argv[2], mapped_path);
 		return 0;
 	}
 	
 	if (!loadELF(&program, main_process))
 	{
-		fprintf(stdout, "Failed to load '%s' as ELF\n", argv[2]);
+		fprintf(log_file, "Failed to load '%s' as ELF\n", argv[2]);
 		return 0;
 	}
 	
@@ -3712,6 +3732,8 @@ void test_add_cd_path();
 
 int main(int argc, char *argv[])
 {
+	stat_file = fopen("stat.txt", "w");
+	
 	init_skip_processes();
 	
 	Process *main_process = mainProcess(argc, argv);
@@ -3731,37 +3753,37 @@ void test_add_cd_path()
 	strcpy(filename, "test/");
 	add_cd_path(filename);
 	strcpy(cd_path, filename);
-	printf(" '%s'\n", cd_path);
+	fprintf(log_file, " '%s'\n", cd_path);
 	
 	strcpy(filename, "../");
 	add_cd_path(filename);
 	strcpy(cd_path, filename);
-	printf(" '%s'\n", cd_path);
+	fprintf(log_file, " '%s'\n", cd_path);
 	
 	strcpy(filename, "../");
 	add_cd_path(filename);
 	strcpy(cd_path, filename);
-	printf(" '%s'\n", cd_path);
+	fprintf(log_file, " '%s'\n", cd_path);
 	
 	strcpy(filename, "test/");
 	add_cd_path(filename);
 	strcpy(cd_path, filename);
-	printf(" '%s'\n", cd_path);
+	fprintf(log_file, " '%s'\n", cd_path);
 
 	strcpy(filename, "a/b/c/");
 	add_cd_path(filename);
 	strcpy(cd_path, filename);
-	printf(" '%s'\n", cd_path);
+	fprintf(log_file, " '%s'\n", cd_path);
 
 	strcpy(filename, "../../");
 	add_cd_path(filename);
 	strcpy(cd_path, filename);
-	printf(" '%s'\n", cd_path);
+	fprintf(log_file, " '%s'\n", cd_path);
 	
 	strcpy(filename, "../../");
 	add_cd_path(filename);
 	strcpy(cd_path, filename);
-	printf(" '%s'\n", cd_path);
+	fprintf(log_file, " '%s'\n", cd_path);
 }
 
 #endif
