@@ -1,6 +1,7 @@
 /*
 	http://ref.x86asm.net/geek.html
 	https://www.felixcloutier.com/x86/
+	https://faculty.nps.edu/cseagle/assembly/sys_call.html
 */
 #include <malloc.h>
 #include <stdio.h>
@@ -261,20 +262,71 @@ void completed_process(int nr, int nr_sub_processes)
 	}
 }
 
+char *source_dir = 0;
+
+bool mapped_in_source(char *filename) { return strncmp(filename, "result/", 7) != 0; } 
+
+const char* map_file(char *name, bool read_only)
+{
+	static char fullname[500];
+	if (strncmp(name, "external/distfiles/", 19) == 0)
+		name += 9;
+	if (name[0] == '/')
+		name++;
+	if (read_only)
+	{
+		static const char *paths[] = { "replacement/", "result/", "*seed/", "*seed/stage0-posix/", "*"};
+		bool found = false;
+		for (int i = 0; i < sizeof(paths)/sizeof(paths[0]); i++)
+		{
+			if (paths[i][0] == '*')
+			{
+				strcpy(fullname, source_dir);
+				strcat(fullname, paths[i] + 1);
+			}
+			else
+				strcpy(fullname, paths[i]);
+			strcat(fullname, name);
+			if (access(fullname, R_OK) == 0)
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+		{
+			strcpy(fullname, "result/");
+			strcat(fullname, name);
+		}
+	}
+	else
+	{
+		strcpy(fullname, "result/");
+		strcat(fullname, name);
+		
+		for (char *s = fullname; *s != '\0'; s++)
+			if (*s == '/')
+			{
+				*s = '\0';
+				if (access(fullname, F_OK) == -1)
+					mkdir(fullname, 0700);
+				*s = '/';
+			}
+	}
+	
+	return fullname;
+}	
+
 class Process;
 class Usage;
-
-char *root_dir = 0;
 
 class File
 {
 public:
 	char *name;
-	char *path;
 
 	int nr;
 	
-	bool path_in_source;
 	bool produced;
 	Process *produced_by;
 	bool exec;
@@ -287,64 +339,23 @@ public:
 
 	File *next;
 	
-	File(const char *fn, int _nr) : path(0), nr(_nr), path_in_source(false), produced(false), produced_by(0), exec(false), used_as_input(0), removed(0), fh(-1), usages(0), next(0)
+	File(const char *fn, int _nr) : nr(_nr), produced(false), produced_by(0), exec(false), used_as_input(0), removed(0), fh(-1), usages(0), next(0), mapped_path(0)
 	{
 		name = copystr(fn);
 	}
 	
-	void setPath(bool read_only)
+	const char *getMappedPath(bool read_only)
 	{
-		static char fullname[500];
-		if (read_only)
-		{
-			if (path == 0)
-			{
-				static const char *paths[] = { "replacement/", "result/", "*seed/", "*seed/stage0-posix/", "*"};
-				bool found = false;
-				for (int i = 0; i < sizeof(paths)/sizeof(paths[0]); i++)
-				{
-					if (paths[i][0] == '*')
-					{
-						strcpy(fullname, root_dir);
-						strcat(fullname, paths[i] + 1);
-					}
-					else
-						strcpy(fullname, paths[i]);
-					strcat(fullname, name);
-					if (access(fullname, R_OK) == 0)
-					{
-						found = true;
-						break;
-					}
-				}
-				if (!found)
-				{
-					strcpy(fullname, "result/");
-					strcat(fullname, name);
-				}
-				path = copystr(fullname);
-				
-				path_in_source = true;
-			}
-		}
-		else if (path == 0 || path_in_source)
-		{
-			strcpy(fullname, "result/");
-			strcat(fullname, name);
-			path = copystr(fullname);
-			
-			for (char *s = fullname; *s != '\0'; s++)
-				if (*s == '/')
-				{
-					*s = '\0';
-					if (access(fullname, F_OK) == -1)
-						mkdir(fullname, 0700);
-					*s = '/';
-				}
-			path_in_source = false;
-		}
-		printf("File %s mapped on %s\n", name, path);
+		if (mapped_path == 0 || (!read_only && mapped_in_source(mapped_path)))
+			mapped_path = copystr(map_file(name, read_only));
+		printf("File %s mapped on %s\n", name, mapped_path);
+		return mapped_path;
 	}
+	
+	const char *mappedPath() { return mapped_path == 0 ? "<NULL>" : mapped_path; }
+	
+private:
+	char *mapped_path;
 };
 
 File *files = 0;
@@ -1088,50 +1099,58 @@ void Process::finish()
 	for (Usage *use = uses; use != 0; use = use->next_use)
 		if (use->file->fh >= 0)
 		{
-			printf(" Close file %s\n", use->file->path);
+			printf(" Close file %s\n", use->file->mappedPath());
 			close(use->file->fh);
 			use->file->fh = -1;
 		}
 }
 
-char cd_path[200] = "";
+char cd_path[200] = "/";
 
 void add_cd_path(char *filename)
 {
-	if (cd_path[0] == '\0')
+	fprintf(stdout, "add_cd_path %s %s => ", cd_path, filename);
+	if (filename[0] == '/')
+	{
+		fprintf(stdout, "%s\n", filename);
 		return;
-	fprintf(stdout, "add_cd_path %s %s =>", cd_path, filename);
+	}
 	char buf[500];
 	strcpy(buf, cd_path);
 	int i = strlen(buf);
+	while (i > 0 && buf[i-1] == '/')
+		i--;
 	char *f = filename;
-	if (strncmp(f, "./", 2) == 0)
-		f += 2;
-	for (;i > 0;)
+	while (f[0] != '\0')
 	{
-		if (strncmp(f, "../", 3) == 0)
+		if (f[0] == '.' && (f[1] == '\0' || f[1] == '/'))
 		{
-			i--;
+			f++;
+			while (f[0] == '/')
+				f++;
+		}
+		else if (f[0] == '.' && f[1] == '.' && (f[2] == '\0' || f[2] == '/'))
+		{
+			f += 2;
+			while (f[0] == '/')
+				f++;
 			while (i > 0 && buf[i-1] != '/')
 				i--;
-			f += 3;
-		}
-		else if (i >= 3 && strncmp(buf + i - 3, "../", 3) == 0)
-		{
-			char *s = f;
-			while (*s != '\0' && *s != '/')
-				s++;
-			if (*s == '\0')
-				break;
-			i -= 3;
-			f = s + 1;
+			while (i >= 0 && buf[i] == '/')
+				i--;
 		}
 		else
-			break;
+		{
+			buf[i++] = '/';
+			while (f[0] != '\0' && f[0] != '/')
+				buf[i++] = *f++;
+			while (f[0] == '/')
+				f++;
+		}
 	}
-	strcpy(buf + i, f);
+	buf[i] = '\0';
 	strcpy(filename, buf);
-	fprintf(stdout, " %s\n", filename);
+	fprintf(stdout, "%s\n", filename);
 }
 
 class ProgramFile
@@ -3144,13 +3163,21 @@ public:
 				int_access();
 				break;
 				
-			case 0x2D:
+			case 0x27:
+				int_mkdir();
+				break;
+				
+			case 0x2d:
 				int_sys_brk();
+				break;
+				
+			case 0xb7:
+				int_getcwd();
 				break;
 				
 			default:
 			    print_trace(stdout);
-				printf("Unknown system call %02x\n", _eax);
+				printf("Unknown system call 0x%x (%d)\n", _eax, _eax);
 				return false;
 		}
 		
@@ -3190,9 +3217,9 @@ public:
 			usage->is_input(0);
 		else
 			usage->is_output(0);
-		file->setPath(read_only);
-		printf(" Open ProgramFile %s %o %o =>", file->path, _ecx, _edx);
-		int fh = open(file->path, _ecx, _edx);
+		const char *mapped_path = file->getMappedPath(read_only);
+		printf(" Open ProgramFile %s %o %o =>", mapped_path, _ecx, _edx);
+		int fh = open(mapped_path, _ecx, _edx);
 		printf(" %d", fh);
 		if (fh <= 0)
 		{
@@ -3208,7 +3235,7 @@ public:
 		for (Usage *use = _process->uses; use != 0; use = use->next_use)
 			if (use->file->fh == (int)_ebx)
 			{
-				printf(" Close file %s\n", use->file->path);
+				printf(" Close file %s\n", use->file->mappedPath());
 				_eax = 0;
 				if (close(use->file->fh) < 0)
 					_eax = errno;
@@ -3385,18 +3412,18 @@ public:
 		File *file = getFile(prog_name);
 		Usage *usage = new Usage(file, _process);
 		usage->is_exec(0);
-		file->setPath(/*read_only:*/true);
+		const char *mapped_path = file->getMappedPath(/*read_only:*/true);
 		
 		ProgramFile program;
-		if (!program.open(file->path))
+		if (!program.open(mapped_path))
 		{
-			fprintf(stdout, "Could not read '%s'\n", file->path);
+			fprintf(stdout, "Could not read '%s'\n", mapped_path);
 			return false;
 		}
 		
 		if (!loadELF(&program, _process))
 		{
-			fprintf(stdout, "Failed to load '%s' as ELF\n", file->path);
+			fprintf(stdout, "Failed to load '%s' as ELF\n", file->mappedPath());
 			return false;
 		}
 		
@@ -3433,21 +3460,37 @@ public:
 		char filename[500];
 		loadString(_ebx, filename, 500);
 		int len = strlen(filename);
-		if (len == 0 || filename[len-1] != '/')
-		{
-			filename[len] = '/';
-			filename[len+1] = '\0';
-		}
-		DO_TRACE(" chdir(\"%s\") ", filename);
+		//if (len == 0 || filename[len-1] != '/')
+		//{
+		//	filename[len] = '/';
+		//	filename[len+1] = '\0';
+		//}
+		/*DO_TRACE*/printf(" chdir(\"%s\") ", filename);
 		add_cd_path(filename);
-		strcpy(cd_path, filename);
-		DO_TRACE("new path: %s\n", cd_path);
+		if (filename[0] == '/' && filename[1] == '\0')
+		{
+			strcpy(cd_path, filename);
+			_eax = 0;
+			return;
+		}
+		const char* mapped_path = map_file(filename, /*read_only*/true);
+		printf("mapped: %s ", mapped_path);
+		struct stat sb;
+		if (stat(mapped_path, &sb) == 0 && S_ISDIR(sb.st_mode))
+		{
+			/*DO_TRACE*/printf("new path: %s\n", filename);
+			strcpy(cd_path, filename);
+			_eax = 0;
+		}
+		else
+			_eax = (uint32_t)-1;
 	}
 	
 	void int_chmod()
 	{
 		char filename[500];
 		loadString(_ebx, filename, 500);
+		add_cd_path(filename);
 		DO_TRACE(" chmod(\"%s\", %x)\n", filename, _ecx);
 		_eax = chmod(filename, _ecx);
 	}
@@ -3463,9 +3506,21 @@ public:
 		char filename[500];
 		loadString(_ebx, filename, 500);
 		add_cd_path(filename);
-		File *file = getFile(filename);
-		file->setPath(/*read_only*/ (_ecx & W_OK) == 0);
-		_eax = access(file->path, _ecx);
+		const char *mapped_path = map_file(filename, /*read_only*/ (_ecx & W_OK) == 0);
+		_eax = access(mapped_path, _ecx);
+	}
+	
+	void int_mkdir()
+	{
+		char filename[500];
+		loadString(_ebx, filename, 500);
+		add_cd_path(filename);
+		char path[500];
+		strcpy(path, "result/");
+		strcat(path, filename);
+		printf("mkdir '%s' at '%s'\n", filename, path);
+		mkdir(path, _ecx);
+		_eax = 0;
 	}
 	
 	void int_sys_brk()
@@ -3482,6 +3537,30 @@ public:
 		}
 		_eax = _process->brk;
 		DO_TRACE(" %08x\n", _eax);
+	}
+	
+	void int_getcwd()
+	{
+		uint32_t buf_addr = _ebx;
+		uint32_t size = _ecx;
+		int cd_path_len = strlen(cd_path);
+		printf("int_getcwd %x %d '%s' %d\n", buf_addr, size, cd_path, cd_path_len); 
+		if (size < cd_path_len + 1)
+			_eax = 0;
+		else
+		{
+			_eax = _ebx;
+			if (cd_path_len == 0)
+			{
+				_process->storeByte(buf_addr, '/');
+				_process->storeByte(buf_addr + 1, '\0');
+			}
+			else
+			{
+				for (int i = 0; i <= cd_path_len; i++)
+					_process->storeByte(buf_addr + i, cd_path[i]);
+			}
+		}
 	}
 	
 	void unknownOpcode()
@@ -3599,19 +3678,19 @@ Process *mainProcess(int argc, char *argv[])
 		return 0;
 	}
 
-	root_dir = argv[1];
+	source_dir = argv[1];
 		
 	Process *main_process = newProcess(0);
 	
 	File *file = getFile(argv[2]);
 	Usage *usage = new Usage(file, main_process);
 	usage->is_exec(0);
-	file->setPath(/*read_only*/true);
+	const char* mapped_path = file->getMappedPath(/*read_only*/true);
 
 	ProgramFile program;
-	if (!program.open(file->path))
+	if (!program.open(mapped_path))
 	{
-		fprintf(stdout, "Could not read '%s' ('%s')\n", argv[2], file->path);
+		fprintf(stdout, "Could not read '%s' ('%s')\n", argv[2], mapped_path);
 		return 0;
 	}
 	
