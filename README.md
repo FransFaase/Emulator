@@ -9,7 +9,10 @@ that parses the kaem files and output which files are read and produced.
 # Usage
 
 The first argument for the `Emulator` program is the path (terminated with a '/') to the directory where
-live-bootstrap is located. The remainder arguments are the executable and it arguments. When
+live-bootstrap is located. This can be preceded of followed by the '-l' option to specify a log
+file where all output of the Emulator program will be written to. (Note that the executables that
+are executed can also produce output to `stdout` and `stderr` that will not be written to the
+log file.) The remainder arguments are the executable and it arguments. When
 live-bootstrap is located in a sibling directory, the following command can be used:
 ```
 ./Emulator ../live-bootstrap/ bootstrap-seeds/POSIX/x86/kaem-optional-seed  kaem.x86
@@ -20,7 +23,10 @@ are automatically created.
 The program also produces the files `skip_processes_new.txt` and `stat.txt`. This first can be used for incremental
 execution where steps that already have been executed succesful can be skipped. For this the contents
 of the file need to be copied to the file `skip_processes.txt` till the steps for which the
-execution has to continue. Note that the contents of the live-bootstrap directory are not modified.
+execution has to continue. Each line contains a step/process number followed by the number of
+all child steps and the exit code (as hexadecimal) of the step.
+
+Note that the contents of the live-bootstrap directory are not modified.
 Files that are modified are placed in the `results` directory. The program always first searches
 for a file in the `results` directory, before looking in the live-bootstrap directory, it is possible
 that skipping steps could lead to incorrect results.
@@ -182,4 +188,20 @@ a different ELF header.
 The commit [df322a8f](https://github.com/FransFaase/Emulator/commit/df322a8fc7cc3dfd9c7d7193afab3bf3c15f31f0)
 adds code to write the `stat.txt` file with information about the child-parent relationship
 between step (processes) and which files are executed, read and written.
+
+## Fixing passing exit status
+
+The exit status (given with system call `exit`) was not correctly transfered to parent
+step/process (using system call `waitpid`).
+
+The exit status of each step is now also stored in the `skip_processes(_new).txt` files. 
+
+The `chmod` system call was not working because it was not operating on the 'mapped' file.
+
+Added command line option for specifying the file to log all output will be send to using the '-l' option
+followed by the filename. Some of the executables also print output to stdout and stderr, causing the output of
+the program getting 'mixed' with the output of the program.
+
+Fixed some problems found with `-Wall` including some 'bug' in the memory access code that might only show up
+at some rare occasions.
 
