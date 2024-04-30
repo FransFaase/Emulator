@@ -222,6 +222,7 @@ struct
 {
 	int nr;
 	int nr_sub_processes;
+	uint32_t exit_value;
 } skipped_processes[MAX_NR_SKIP_PROCESSES];
 int nr_skipped_processes = 0;
 
@@ -235,9 +236,10 @@ void init_skip_processes()
 		char buffer[40];
 		while (fgets(buffer, 39, f))
 		{
-			sscanf(buffer, "%d %d",
+			sscanf(buffer, "%d %d %x",
 				&skipped_processes[nr_skipped_processes].nr, 
-				&skipped_processes[nr_skipped_processes].nr_sub_processes);
+				&skipped_processes[nr_skipped_processes].nr_sub_processes,
+				&skipped_processes[nr_skipped_processes].exit_value);
 			nr_skipped_processes++;
 		}
 		fclose(f);
@@ -245,27 +247,28 @@ void init_skip_processes()
 	f_skip = fopen("skip_processes_new.txt", "w");
 }
 
-bool skip_process(int nr, int &nr_sub_processes)
+bool skip_process(int nr, int &nr_sub_processes, uint32_t &exit_value)
 {
 	for (int i = 0; i < nr_skipped_processes; i++)
 		if (skipped_processes[i].nr == nr)
 		{
 			nr_sub_processes = skipped_processes[i].nr_sub_processes;
+			exit_value = skipped_processes[i].exit_value;
 			return true;
 		}
 	return false;
 }
 
-void completed_process(int nr, int nr_sub_processes)
+void completed_process(int nr, int nr_sub_processes, uint32_t exit_value)
 {
 	if (f_skip != 0)
 	{
-		fprintf(f_skip, "%d %d\n", nr, nr_sub_processes);
+		fprintf(f_skip, "%d %d %x\n", nr, nr_sub_processes, exit_value);
 		fflush(f_skip);
 	}
 }
 
-char *source_dir = 0;
+const char *source_dir = 0;
 
 bool mapped_in_source(char *filename) { return strncmp(filename, "result/", 7) != 0; } 
 
@@ -280,7 +283,7 @@ const char* map_file(char *name, bool read_only)
 	{
 		static const char *paths[] = { "replacement/", "result/", "*seed/", "*seed/stage0-posix/", "*"};
 		bool found = false;
-		for (int i = 0; i < sizeof(paths)/sizeof(paths[0]); i++)
+		for (size_t i = 0; i < sizeof(paths)/sizeof(paths[0]); i++)
 		{
 			if (paths[i][0] == '*')
 			{
@@ -556,7 +559,7 @@ public:
 
 	uint32_t loadDWord(uint32_t address)
 	{
-		if (address & 0x3 == 0)
+		if ((address & 0x3) == 0)
 		{
 #if TRACE_MEMORY
 			uint32_t value = *(uint32_t*)(memory[(uint16_t)(address >> 16)] + (address & 0xffff));
@@ -588,7 +591,7 @@ public:
 		if (trace_mem)
 			fprintf(log_file, "Store %08x at %08x\n", value, address);
 #endif
-		if (address & 0x3 == 0)
+		if ((address & 0x3) == 0)
 		{
 			*(uint32_t*)(memory[(uint16_t)(address >> 16)] + (address & 0xffff)) = value;
 		}
@@ -1410,7 +1413,7 @@ bool loadELF(ProgramFile *file, Process *process)
 				uint32_t strtab = file->readLong(strtab_addr);
 				
 				
-				for (int i = 0; i < sh_info; i++)
+				for (uint32_t i = 0; i < sh_info; i++)
 				{
 					uint32_t off = sh_offset + i * sh_entsize;
 					uint32_t st_name = file->readLong(off);
@@ -3206,6 +3209,7 @@ public:
 			statements = 0;
 			return false;
 		}
+		_exit_value = _ebx;
 		// Exit
 		if (!_exit_process())
 			return false;
@@ -3264,7 +3268,7 @@ public:
 	{
 		_eax = 0;
 		if (_ecx != 0)
-			_process->storeDWord(_ecx, 0);
+			_process->storeDWord(_ecx, _exit_value);
 	}
 	
 	void int_unlink()
@@ -3283,6 +3287,7 @@ public:
 			output_function_addresses(_process);
 			do_gen = false;
 			statements = 0;
+			fprintf(log_file, "Generated code, exit\n");
 			exit(1);
 		}
 		_process->pc = _pc;
@@ -3368,7 +3373,7 @@ public:
 		fprintf(log_file, " execve\n  |%s| ebx: %08x ecx: %08x edx: %08x\n", prog_name, _ebx, _ecx, _edx);
 		
 		int nr_sub_processes = 0;
-		if (skip_process(_process->nr, nr_sub_processes))
+		if (skip_process(_process->nr, nr_sub_processes, _exit_value))
 		{
 			fprintf(log_file, "Skip process %d\n", _process->nr);
 			_process->nr_sub_processes = nr_sub_processes;
@@ -3477,12 +3482,6 @@ public:
 	{
 		char filename[500];
 		loadString(_ebx, filename, 500);
-		int len = strlen(filename);
-		//if (len == 0 || filename[len-1] != '/')
-		//{
-		//	filename[len] = '/';
-		//	filename[len+1] = '\0';
-		//}
 		DO_TRACE(" chdir(\"%s\") ", filename);
 		add_cd_path(filename);
 		if (filename[0] == '/' && filename[1] == '\0')
@@ -3509,8 +3508,11 @@ public:
 		char filename[500];
 		loadString(_ebx, filename, 500);
 		add_cd_path(filename);
+		const char* mapped_file = map_file(filename, /*read_only*/false);
 		DO_TRACE(" chmod(\"%s\", %x)\n", filename, _ecx);
-		_eax = chmod(filename, _ecx);
+		_eax = chmod(mapped_file, _ecx);
+		if (_eax != 0)
+			fprintf(log_file, "chmod('%s', %x) returned %d, errno = %d\n", filename, _ecx, _eax, errno);
 	}
 	
 	void int_lseek()
@@ -3561,7 +3563,7 @@ public:
 	{
 		uint32_t buf_addr = _ebx;
 		uint32_t size = _ecx;
-		int cd_path_len = strlen(cd_path);
+		uint32_t cd_path_len = strlen(cd_path);
 		fprintf(log_file, "int_getcwd %x %d '%s' %d\n", buf_addr, size, cd_path, cd_path_len); 
 		if (size < cd_path_len + 1)
 			_eax = 0;
@@ -3645,6 +3647,7 @@ protected:
 	uint32_t _ebp;
 	int32_t _flags;
 
+	uint32_t _exit_value;
 	
 // For debugging generated programs:
 public:
@@ -3671,7 +3674,7 @@ public:
 private:
 	bool _exit_process()
 	{
-		completed_process(_process->nr, _process->nr_sub_processes);
+		completed_process(_process->nr, _process->nr_sub_processes, _exit_value);
 		if (_process->parent == 0)
 			return false;
 		_process->finish();
@@ -3692,17 +3695,45 @@ private:
 
 Process *mainProcess(int argc, char *argv[])
 {
-	if (argc < 3)
+	int i = 1;
+	source_dir = 0;
+	while (i < argc)
 	{
-		fprintf(log_file, "No argument\n");
+		const char *arg = argv[i];
+		if (strcmp(arg, "-l") == 0 && i + 1 < argc)
+		{
+			log_file = fopen(argv[i+1], "w");
+			if (log_file == 0)
+			{
+				fprintf(log_file, "Cannot write to '%s'\n", argv[i+1]);
+				return 0;
+			}
+			i += 2;
+			fprintf(stderr, "Log file: '%s'\n", argv[i+1]);
+		}
+		else if (source_dir == 0)
+		{
+			fprintf(stderr, "Source dir: '%s'\n", arg);
+			source_dir = arg;
+			i++;
+		}
+		else
+			break;
+	}
+	if (source_dir == 0)
+	{
+		fprintf(log_file, "No source directory has been specified\n");
+		return 0;
+	}
+	if (i + 1 >= argc)
+	{
+		fprintf(log_file, "Nothing to execute\n");
 		return 0;
 	}
 
-	source_dir = argv[1];
-		
 	Process *main_process = newProcess(0);
 	
-	File *file = getFile(argv[2]);
+	File *file = getFile(argv[i]);
 	Usage *usage = new Usage(file, main_process);
 	usage->is_exec(0);
 	const char* mapped_path = file->getMappedPath(/*read_only*/true);
@@ -3710,18 +3741,18 @@ Process *mainProcess(int argc, char *argv[])
 	ProgramFile program;
 	if (!program.open(mapped_path))
 	{
-		fprintf(log_file, "Could not read '%s' ('%s')\n", argv[2], mapped_path);
+		fprintf(log_file, "Could not read '%s' ('%s')\n", argv[i], mapped_path);
 		return 0;
 	}
 	
 	if (!loadELF(&program, main_process))
 	{
-		fprintf(log_file, "Failed to load '%s' as ELF\n", argv[2]);
+		fprintf(log_file, "Failed to load '%s' as ELF\n", argv[i]);
 		return 0;
 	}
 	
 	char *env[1] = { 0 };
-	main_process->init(argc - 2, argv + 2, env);
+	main_process->init(argc - i, argv + i, env);
 	
 	return main_process;
 }	
