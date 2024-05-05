@@ -13,6 +13,11 @@
 #include <string.h>
 #include <stdarg.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/ioctl.h>
+#include <sys/resource.h>
+#include <sys/utsname.h>
+#include <time.h>
 
 char *copystr(const char *v)
 {
@@ -100,6 +105,8 @@ void print_trace(FILE *f)
 #else
 #define DO_TRACE(...) 
 #endif
+
+int gen_program_for = -1;
 
 typedef unsigned char byte;
 
@@ -530,7 +537,7 @@ public:
 	
 	byte loadByte(uint32_t address)
 	{
-#if TRACE_MEMORY
+#ifdef TRACE_MEMORY
 		byte result = memory[(uint16_t)(address >> 16)][(address & 0xffff)];
 		if (trace_mem)
 			fprintf(log_file, "Load %02x from %08x\n", result, address);
@@ -550,7 +557,7 @@ public:
 
 	void storeByte(uint32_t address, byte value)
 	{
-#if TRACE_MEMORY
+#ifdef TRACE_MEMORY
 		if (trace_mem)
 			fprintf(log_file, "Store %02x at %08x\n", value, address);
 #endif
@@ -561,7 +568,7 @@ public:
 	{
 		if ((address & 0x3) == 0)
 		{
-#if TRACE_MEMORY
+#ifdef TRACE_MEMORY
 			uint32_t value = *(uint32_t*)(memory[(uint16_t)(address >> 16)] + (address & 0xffff));
 			if (trace_mem)
 				fprintf(log_file, "Load %08x from %08x\n", value, address);
@@ -578,7 +585,7 @@ public:
 		value |= memory[(uint16_t)(address >> 16)][(address & 0xffff)] << 16;
 		address++;
 		value |= memory[(uint16_t)(address >> 16)][(address & 0xffff)] << 24;
-#if TRACE_MEMORY
+#ifdef TRACE_MEMORY
 		if (trace_mem)
 			fprintf(log_file, "Load %08x from %08x\n", value, address);
 #endif
@@ -587,7 +594,7 @@ public:
 	
 	void storeDWord(uint32_t address, uint32_t value)
 	{
-#if TRACE_MEMORY
+#ifdef TRACE_MEMORY
 		if (trace_mem)
 			fprintf(log_file, "Store %08x at %08x\n", value, address);
 #endif
@@ -613,7 +620,7 @@ public:
 	void push(uint32_t value)
 	{
 		sp -= 4;
-#if TRACE_MEMORY
+#ifdef TRACE_MEMORY
 		if (trace_mem) fprintf(log_file, "push %08x to %08x\n", value, sp);
 		else { DO_TRACE("push %08x to %08x\n", value, sp); }
 #endif
@@ -628,7 +635,7 @@ public:
 	void pushByte(byte value)
 	{
 		sp--;
-#if TRACE_MEMORY
+#ifdef TRACE_MEMORY
 		if (trace_mem) fprintf(log_file, "push %08x to %08x\n", value, sp);
 		else { DO_TRACE("push %08x to %08x\n", value, sp); }
 #endif
@@ -648,7 +655,7 @@ public:
 			exit(-1);
 		}
 		uint32_t value = *(uint32_t*)(memory[(uint16_t)(sp >> 16)] + (sp & 0xffff));
-#if TRACE_MEMORY
+#ifdef TRACE_MEMORY
 		if (trace_mem) fprintf(log_file, "pop %08x from %08x\n", value, sp);
 		else { DO_TRACE("pop %08x from %08x\n", value, sp); }
 #endif
@@ -803,7 +810,7 @@ void generate_code(Process *process)
 			stat->gen_state = 'g';
 					
 			fprintf(fout, "\tvoid %s()\n\t{\n", process->name_for_function(start_code + i, stat->function_enter));
-			fprintf(fout, "\t\tindent += 2; if (trace_func) fprintf(log_file, \"%%*.*s%s\\n\", indent, indent, \"\");\n", process->name_for_function(start_code + i, stat->function_enter));
+			fprintf(fout, "\t\tindent += 2; if (trace_func) fprintf(log_file, \"%%*.*s%s\\n\", indent, indent, \"\"); /* %x */\n", process->name_for_function(start_code + i, stat->function_enter), start_code + i);
 			for (int labels_to_go = 1; labels_to_go > 0; )
 			{
 				bool output = false;
@@ -1304,7 +1311,7 @@ bool loadELF(ProgramFile *file, Process *process)
 		}
 		if (ph_filesz != ph_memsz)
 		{
-			fprintf(log_file, "ph_vaddr %08x %08x\n", ph_filesz, ph_memsz);
+			fprintf(log_file, "ph_filesz %08x %08x\n", ph_filesz, ph_memsz);
 			return false;
 		}
 		if (ph_flags != 7)
@@ -1320,6 +1327,7 @@ bool loadELF(ProgramFile *file, Process *process)
 		
 		if (shoff == 0)
 		{
+			fprintf(log_file, "ph_offset %x ph_vaddr %x\n", ph_offset, ph_vaddr);
 			uint32_t to_mem = ph_vaddr + from_file;
 			process->start_code = to_mem;
 			for (uint32_t j = 0; j < ph_filesz; j++)
@@ -2171,6 +2179,12 @@ public:
 							DO_TRACE(" add_ebx %02x %08x\n", val8, _ebx);
 							break;
 						
+						case 0xC4:
+							val8 = getPC();
+							CODE_V8(_process->sp += SIGNEXT(val8));
+							DO_TRACE(" add_esp %02x %08x\n", val8, _process->sp);
+							break;
+						
 						case 0xC5:
 							val8 = getPC();
 							CODE_V8(_ebp += SIGNEXT(val8));
@@ -2390,91 +2404,91 @@ public:
 						
 						case 0x41:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_ecx + val8, _eax));
+							CODE_V8(_process->storeDWord(_ecx + SIGNEXT(val8), _eax));
 							DO_TRACE(" mov_eax: %08x to memory[ecx:%08x + %02x]\n", _eax, _ecx, val8);
 							break;
 						
 						case 0x42:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_edx + val8, _eax));
+							CODE_V8(_process->storeDWord(_edx + SIGNEXT(val8), _eax));
 							DO_TRACE(" mov_eax: %08x to memory[edx:%08x + %02x]\n", _eax, _edx, val8);
 							break;
 						
 						case 0x45:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_ebp + val8, _eax));
+							CODE_V8(_process->storeDWord(_ebp + SIGNEXT(val8), _eax));
 							DO_TRACE(" mov_eax: %08x to memory[ebp:%08x + %02x]\n", _eax, _ebp, val8);
 							break;
 						
 						case 0x48:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_eax + val8, _ecx));
+							CODE_V8(_process->storeDWord(_eax + SIGNEXT(val8), _ecx));
 							DO_TRACE(" mov_ecx: %08x to memory[eax:%08x + %02x]\n", _ecx, _eax, val8);
 							break;
 						
 						case 0x4A:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_edx + val8, _ecx));
+							CODE_V8(_process->storeDWord(_edx + SIGNEXT(val8), _ecx));
 							DO_TRACE(" mov_ecx: %08x to memory[edx:%08x + %02x]\n", _ecx, _edx, val8);
 							break;
 						
 						case 0x50:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_eax + val8, _edx));
+							CODE_V8(_process->storeDWord(_eax + SIGNEXT(val8), _edx));
 							DO_TRACE(" mov_edx: %08x to memory[eax:%08x + %02x]\n", _edx, _eax, val8);
 							break;
 						
 						case 0x55:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_ebp + val8, _edx));
+							CODE_V8(_process->storeDWord(_ebp + SIGNEXT(val8), _edx));
 							DO_TRACE(" mov_edx: %08x to memory[ebp:%08x + %02x]\n", _edx, _ebp, val8);
 							break;
 						
 						case 0x58:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_eax + val8, _ebx));
+							CODE_V8(_process->storeDWord(_eax + SIGNEXT(val8), _ebx));
 							DO_TRACE(" mov_ebx: %08x to memory[eax:%08x + %02x]\n", _ebx, _eax, val8);
 							break;
 						
 						case 0x59:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_ecx + val8, _ebx));
+							CODE_V8(_process->storeDWord(_ecx + SIGNEXT(val8), _ebx));
 							DO_TRACE(" mov_ebx: %08x to memory[ecx:%08x + %02x]\n", _ebx, _ecx, val8);
 							break;
 						
 						case 0x5A:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_edx + val8, _ebx));
+							CODE_V8(_process->storeDWord(_edx + SIGNEXT(val8), _ebx));
 							DO_TRACE(" mov_ebx: %08x to memory[edx:%08x + %02x]\n", _ebx, _edx, val8);
 							break;
 						
 						case 0x6A:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_edx + val8, _ebp));
+							CODE_V8(_process->storeDWord(_edx + SIGNEXT(val8), _ebp));
 							DO_TRACE(" mov_ebp: %08x to memory[edx:%08x + %02x]\n", _ebp, _edx, val8);
 							break;
 						
 						case 0x6E:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_esi + val8, _ebp));
+							CODE_V8(_process->storeDWord(_esi + SIGNEXT(val8), _ebp));
 							DO_TRACE(" mov_ebp: %08x to memory[esi:%08x + %02x]\n", _ebp, _esi, val8);
 							break;
 						
 						case 0x72:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_edx + val8, _esi));
+							CODE_V8(_process->storeDWord(_edx + SIGNEXT(val8), _esi));
 							DO_TRACE(" mov_esi: %08x to memory[edx:%08x + %02x]\n", _esi, _edx, val8);
 							break;
 						
 						case 0x75:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_ebp + val8, _esi));
+							CODE_V8(_process->storeDWord(_ebp + SIGNEXT(val8), _esi));
 							DO_TRACE(" mov_esi: %08x to memory[ebp:%08x + %02x]\n", _esi, _ebp, val8);
 							break;
 						
 						case 0x78:
 							val8 = getPC();
-							CODE_V8(_process->storeDWord(_eax + val8, _edi));
+							CODE_V8(_process->storeDWord(_eax + SIGNEXT(val8), _edi));
 							DO_TRACE(" mov_edi: %08x to memory[eax:%08x + %02x]\n", _edi, _eax, val8);
 							break;
 						
@@ -2595,7 +2609,7 @@ public:
 							
 						case 0x4B:
 							val8 = getPC();
-							CODE_V8(set_cl(_process->loadByte(_ebx + val8)));
+							CODE_V8(set_cl(_process->loadByte(_ebx + SIGNEXT(val8))));
 							DO_TRACE(" mov_bl,[edx:%08x + %02x] %08x\n", _ebx, val8, _ecx);
 							break; 
 							
@@ -2663,97 +2677,121 @@ public:
 
 						case 0x40:
 							val8 = getPC();
-							CODE_V8(_eax = _process->loadDWord(_eax + val8));
+							CODE_V8(_eax = _process->loadDWord(_eax + SIGNEXT(val8)));
 							DO_TRACE(" mov_eax: %08x from memory[eax + %02x]\n", _eax, val8);
 							break;
 							
 						case 0x41:
 							val8 = getPC();
-							CODE_V8(_eax = _process->loadDWord(_ecx + val8));
+							CODE_V8(_eax = _process->loadDWord(_ecx + SIGNEXT(val8)));
 							DO_TRACE(" mov_eax: %08x from memory[ecx:%08x + %02x]\n", _eax, _ecx, val8);
 							break;
 							
 						case 0x42:
 							val8 = getPC();
-							CODE_V8(_eax = _process->loadDWord(_edx + val8));
+							CODE_V8(_eax = _process->loadDWord(_edx + SIGNEXT(val8)));
 							DO_TRACE(" mov_eax: %08x from memory[edx:%08x + %02x]\n", _eax, _edx, val8);
 							break;
 							
 						case 0x43:
 							val8 = getPC();
-							CODE_V8(_eax = _process->loadDWord(_ebx + val8));
+							CODE_V8(_eax = _process->loadDWord(_ebx + SIGNEXT(val8)));
 							DO_TRACE(" mov_eax: %08x from memory[ebx:%08x + %02x]\n", _eax, _ebx, val8);
 							break;
 							
 						case 0x45:
 							val8 = getPC();
-							CODE_V8(_eax = _process->loadDWord(_ebp + val8));
+							CODE_V8(_eax = _process->loadDWord(_ebp + SIGNEXT(val8)));
 							DO_TRACE(" mov_eax: %08x from memory[%08x + %02x]\n", _eax, _ebp, val8);
 							break;
 							
 						case 0x46:
 							val8 = getPC();
-							CODE_V8(_eax = _process->loadDWord(_esi + val8));
+							CODE_V8(_eax = _process->loadDWord(_esi + SIGNEXT(val8)));
 							DO_TRACE(" mov_eax: %08x from memory[%08x + %02x]\n", _eax, _esi, val8);
 							break;
 							
 						case 0x48:
 							val8 = getPC();
-							CODE_V8(_ecx = _process->loadDWord(_eax + val8));
+							CODE_V8(_ecx = _process->loadDWord(_eax + SIGNEXT(val8)));
 							DO_TRACE(" mov_ecx: %08x from memory[%08x + %02x]\n", _ecx, _eax, val8);
 							break;
 							
 						case 0x49:
 							val8 = getPC();
-							CODE_V8(_ecx = _process->loadDWord(_ecx + val8));
+							CODE_V8(_ecx = _process->loadDWord(_ecx + SIGNEXT(val8)));
 							DO_TRACE(" mov_ecx: %08x from memory[ecx + %02x]\n", _ecx, val8);
 							break;
 							
 						case 0x4A:
 							val8 = getPC();
-							CODE_V8(_ecx = _process->loadDWord(_edx + val8));
+							CODE_V8(_ecx = _process->loadDWord(_edx + SIGNEXT(val8)));
 							DO_TRACE(" mov_ecx: %08x from memory[%08x + %02x]\n", _ecx, _edx, val8);
+							break;
+							
+						case 0x4D:
+							val8 = getPC();
+							CODE_V8(_ecx = _process->loadDWord(_ebp + SIGNEXT(val8)));
+							DO_TRACE(" mov_ecx: %08x from memory[%08x + %02x]\n", _ecx, _ebp, val8);
 							break;
 							
 						case 0x52:
 							val8 = getPC();
-							CODE_V8(_edx = _process->loadDWord(_edx + val8));
+							CODE_V8(_edx = _process->loadDWord(_edx + SIGNEXT(val8)));
 							DO_TRACE(" mov_edx: %08x from memory[edx + %02x]\n", _edx, val8);
+							break;
+							
+						case 0x55:
+							val8 = getPC();
+							CODE_V8(_edx = _process->loadDWord(_ebp + SIGNEXT(val8)));
+							DO_TRACE(" mov_edx: %08x from memory[%08x + %02x]\n", _edx, _ebp, val8);
 							break;
 							
 						case 0x56:
 							val8 = getPC();
-							CODE_V8(_edx = _process->loadDWord(_esi + val8));
+							CODE_V8(_edx = _process->loadDWord(_esi + SIGNEXT(val8)));
 							DO_TRACE(" mov_edx: %08x from memory[%08x + %02x]\n", _edx, _esi, val8);
 							break;
 							
 						case 0x58:
 							val8 = getPC();
-							CODE_V8(_ebx = _process->loadDWord(_eax + val8));
+							CODE_V8(_ebx = _process->loadDWord(_eax + SIGNEXT(val8)));
 							DO_TRACE(" mov_ebx: %08x from memory[%08x + %02x]\n", _ebx, _eax, val8);
 							break;
 							
 						case 0x59:
 							val8 = getPC();
-							CODE_V8(_ebx = _process->loadDWord(_ecx + val8));
+							CODE_V8(_ebx = _process->loadDWord(_ecx + SIGNEXT(val8)));
 							DO_TRACE(" mov_ebx: %08x from memory[%08x + %02x]\n", _ebx, _ecx, val8);
 							break;
 							
 						case 0x5B:
 							val8 = getPC();
-							CODE_V8(_ebx = _process->loadDWord(_ebx + val8));
+							CODE_V8(_ebx = _process->loadDWord(_ebx + SIGNEXT(val8)));
 							DO_TRACE(" mov_ebx: %08x from memory[ebx + %02x]\n", _ebx, val8);
+							break;
+							
+						case 0x5D:
+							val8 = getPC();
+							CODE_V8(_ebx = _process->loadDWord(_ebp + SIGNEXT(val8)));
+							DO_TRACE(" mov_ebx: %08x from memory[ebp + %02x]\n", _ebx, val8);
 							break;
 							
 						case 0x6D:
 							val8 = getPC();
-							CODE_V8(_ebp = _process->loadDWord(_ebp + val8));
+							CODE_V8(_ebp = _process->loadDWord(_ebp + SIGNEXT(val8)));
 							DO_TRACE(" mov_ebp: %08x from memory[ebp + %02x]\n", _ebp, val8);
 							break;
 							
+						case 0x75:
+							val8 = getPC();
+							CODE_V8(_esi = _process->loadDWord(_ebp + SIGNEXT(val8)));
+							DO_TRACE(" mov_esi: %08x from memory[%08x + %02x]\n", _esi, _ebp, val8);
+							break;
+						
 						case 0x7A:
 							val8 = getPC();
-							CODE_V8(_edi = _process->loadDWord(_edx + val8));
+							CODE_V8(_edi = _process->loadDWord(_edx + SIGNEXT(val8)));
 							DO_TRACE(" mov_edi: %08x from memory[%08x + %02x]\n", _edi, _edx, val8);
 							break;
 						
@@ -2973,6 +3011,10 @@ public:
 #endif
 					break;
 					
+				case 0xC9:
+					CODE(_process->sp = _ebp; _ebp = _process->pop());
+					break;
+					
 				case 0xCD:
 					opcode = getPC();
 					DO_TRACE(" int %02x\n", opcode);
@@ -2989,6 +3031,7 @@ public:
 						    print_trace(log_file);
 #endif
 							fprintf(log_file, "Unknown interupt %02x\n", opcode);
+							gen_program();
 							return;
 					}
 					break;
@@ -3022,6 +3065,7 @@ public:
 						    print_trace(log_file);
 #endif
 							fprintf(log_file, "Unknown interupt %02x\n", opcode);
+							gen_program();
 							return;
 					}
 					break;
@@ -3092,6 +3136,10 @@ public:
 							return;
 					}
 					break;
+				
+				case 0xF4:
+					fprintf(log_file, "HLT\n");
+					return;
 					
 				case 0xFF:
 					opcode = getPC();
@@ -3180,26 +3228,55 @@ public:
 				int_mkdir();
 				break;
 				
+			case 0x29:
+				int_dup();
+				break;
+				
 			case 0x2d:
 				int_sys_brk();
+				break;
+				
+			case 0x36:
+				int_ioctl();
+				break;
+				
+			case 0x37:
+				int_fcntl();
+				break;
+				
+			case 0x4e:
+				int_gettimeofday();
+				break;
+				
+			case 0x72:
+				int_wait4();
+				break;
+				
+			case 0x7a:
+				int_newuname();
 				break;
 				
 			case 0xb7:
 				int_getcwd();
 				break;
 				
+			case 0x109:
+				int_clock_gettime();
+				break;
+							
 			default:
 #ifdef ENABLE_DO_TRACE
 				print_trace(log_file);
 #endif
 				fprintf(log_file, "Unknown system call 0x%x (%d)\n", _eax, _eax);
+				gen_program();
 				return false;
 		}
 		
 		return true;
 	}
 	
-	bool int_exit()
+	void gen_program()
 	{
 		if (do_gen)
 		{
@@ -3207,6 +3284,14 @@ public:
 			output_function_addresses(_process);
 			do_gen = false;
 			statements = 0;
+		}
+	}
+		
+	bool int_exit()
+	{
+		if (do_gen)
+		{
+			gen_program();
 			return false;
 		}
 		_exit_value = _ebx;
@@ -3276,7 +3361,9 @@ public:
 		char filename[500];
 		loadString(_ebx, filename, 500);
 		add_cd_path(filename);
-		unlink(filename);
+		const char* mapped_file = map_file(filename, /*read_only*/false);
+		_eax = unlink(mapped_file);
+		fprintf(log_file, "unlink '%s' mapped '%s' %d\n", filename, mapped_file, _eax); 
 	}
 	
 	void int_fork()
@@ -3460,7 +3547,7 @@ public:
 		_edi = 0;
 		_ebp = 0;
 		fprintf(log_file, "Start running process %d\n", _process->nr);
-		if (_process->nr == -1)
+		if (_process->nr == 227)
 		{
 #ifdef ENABLE_DO_TRACE
 			do_trace = true;
@@ -3468,7 +3555,7 @@ public:
 			//trace_mem = true;
 #endif
 		}
-		if (_process->nr == -1)
+		if (_process->nr == gen_program_for)
 		{
 			_process->functionNames = read_function_names();
 			init_statements(_process->start_code, _process->end_code);
@@ -3543,6 +3630,11 @@ public:
 		_eax = 0;
 	}
 	
+	void int_dup()
+	{
+		_eax = dup(_ebx);
+	}
+	
 	void int_sys_brk()
 	{
 		DO_TRACE(" sys_brk %08x:", _ebx);
@@ -3557,6 +3649,73 @@ public:
 		}
 		_eax = _process->brk;
 		DO_TRACE(" %08x\n", _eax);
+	}
+	
+	void int_ioctl()
+	{
+		_eax = ioctl(_ebx, _ecx, _edx);
+		DO_TRACE(" sys_ioctl(%d, %x, %x) : %d\n", _ebx, _ecx, _edx, _eax);
+	}
+	
+	void int_fcntl()
+	{
+		_eax = fcntl(_ebx, _ecx, _edx);
+		DO_TRACE(" sys_fcntl(%d, %x, %x) : %d\n", _ebx, _ecx, _edx, _eax);
+	}
+	
+	void int_gettimeofday()
+	{
+		struct timeval *tv = 0;
+		struct timeval tval;
+		if (_ebx != 0)
+		{
+			for (uint32_t i = 0; i < sizeof(struct timeval); i++)
+				((byte*)&tval)[i] = _process->loadByte(_ebx + i);
+			tv = &tval;
+		}
+		struct timezone *tz = 0;
+		struct timezone tzone;
+		if (_ecx != 0)
+		{
+			for (uint32_t i = 0; i < sizeof(struct timezone); i++)
+				((byte*)&tzone)[i] = _process->loadByte(_ecx + i);
+			tz = &tzone;
+		}
+		_eax = gettimeofday(tv, tz);
+		if (tv != 0)
+		{
+			for (uint32_t i = 0; i < sizeof(struct timeval); i++)
+				_process->storeByte(_ebx + i, ((byte*)&tval)[i]);
+		}
+		if (tz != 0)
+		{
+			for (uint32_t i = 0; i < sizeof(struct timezone); i++)
+				_process->storeByte(_ecx + i, ((byte*)&tzone)[i]);
+		}
+	}
+	
+	void int_wait4()
+	{
+		_eax = 0;
+		if (_ecx != 0)
+			_process->storeDWord(_ecx, _exit_value);
+		// Ignore 'options' in _edx
+		if (_esi != 0)
+		{
+			for (uint32_t i = 0; i < sizeof(struct rusage); i++)
+				_process->storeByte(_esi + i, 0);
+		}
+	}
+	
+	void int_newuname()
+	{
+		struct utsname name;
+		uname(&name);
+		if (_ebx != 0)
+		{
+			for (uint32_t i = 0; i < sizeof(struct utsname); i++)
+				_process->storeByte(_ebx + i, 0);
+		}
 	}
 	
 	void int_getcwd()
@@ -3577,9 +3736,22 @@ public:
 			}
 			else
 			{
-				for (int i = 0; i <= cd_path_len; i++)
+				for (uint32_t i = 0; i <= cd_path_len; i++)
 					_process->storeByte(buf_addr + i, cd_path[i]);
 			}
+		}
+	}
+	
+	void int_clock_gettime()
+	{
+		clockid_t clockid = (clockid_t)_ebx;
+		struct timespec tp;
+		_eax = clock_gettime(clockid, &tp);
+		fprintf(log_file, "clock_gettime\n");
+		for (uint32_t i = 0; i < sizeof(struct timespec); i++)
+		{
+			fprintf(log_file, " store %02x at %x\n", ((byte*)&tp)[i], _ecx + i); 
+			_process->storeByte(_ecx + i, ((byte*)&tp)[i]);
 		}
 	}
 	
@@ -3588,6 +3760,7 @@ public:
 #ifdef ENABLE_DO_TRACE
 		print_trace(log_file);
 #endif
+		gen_program();
 		fprintf(log_file, "Unknown opcode in %s\n", _process->name);
 	}
 
@@ -3710,6 +3883,12 @@ Process *mainProcess(int argc, char *argv[])
 			}
 			i += 2;
 			fprintf(stderr, "Log file: '%s'\n", argv[i+1]);
+		}
+		else if (strcmp(arg, "-gen") == 0 && i + 1 < argc)
+		{
+			gen_program_for = atoi(argv[i+1]);
+			i += 2;
+			fprintf(stderr, "Generate program for %d\n", gen_program_for);
 		}
 		else if (source_dir == 0)
 		{
