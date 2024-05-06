@@ -224,6 +224,8 @@ might still contains with respect to the execution of GNU Mes. The following cha
 - Generate `program.cpp` also when encountering unknown instruction or unknown interupt.
 - Fixed `unlink` system call: was not working on mapped file.
 
+The execution for the following steps seems to take hours and looks like be stuck in an endless loop.
+
 # Open issues
 
 - program generation is broken with respect to interupt 80. The generator takes the current value
