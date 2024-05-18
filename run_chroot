@@ -1,0 +1,15 @@
+#! /bin/bash
+
+rm -rf rootfs
+mkdir rootfs
+cd rootfs
+cp -r -t . ../../live-bootstrap/seed/stage0-posix/*
+cp -rf -t . ../../live-bootstrap/seed/*.kaem
+cp -r -t . ../../live-bootstrap/seed/*.checksums
+cp -r -t . ../../live-bootstrap/seed/*.c
+cp -r -t . ../../live-bootstrap/steps
+mkdir external
+cp -r -t external ../../live-bootstrap/distfiles
+cp ../replacement/steps/bootstrap.cfg steps
+cd ..
+strace -f -o trace.txt -e trace=open,openat,close,chmod,chdir,dup,fcntl,link,linkat,unlink,fork,execve chroot rootfs /bootstrap-seeds/POSIX/x86/kaem-optional-seed
