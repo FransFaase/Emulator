@@ -51,6 +51,14 @@ in `Emulator.cpp` using the output `objdump` using the following command:
 objdump -d executable | ./missing_inst | sort
 ```
 
+### scan_trace
+
+The `scan_trace` program can be used to parse the output of the `strace` command on executing
+live-bootstrap in a `chroot` environment with the Bash script
+[run_chroot](https://github.com/FransFaase/Emulator/blob/main/run_chroot). 
+The output of this can be viewed [here](https://fransfaase.github.io/Emulator/).
+The program stops at parsing the input when the `tcc-boot0` executable is executed the first time.
+
 ## Development history
 
 The most important development steps with pointer to commits.
@@ -225,6 +233,13 @@ might still contains with respect to the execution of GNU Mes. The following cha
 - Fixed `unlink` system call: was not working on mapped file.
 
 The execution for the following steps seems to take hours and looks like be stuck in an endless loop.
+
+## Finding the input files for compiling tcc
+
+The commit [6a8802d0](https://github.com/FransFaase/Emulator/commit/6a8802d0120435586151c1834448a15c9660927c)
+introduced the `scan_trace` program, which can parse the output of the `strace` command to find out
+which files are read and created. The program stops parsing the input until the first execution of
+`tcc-boot0`.
 
 # Open issues
 
