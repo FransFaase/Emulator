@@ -17,6 +17,7 @@
 #include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/utsname.h>
+#include <termios.h>
 #include <time.h>
 
 char *copystr(const char *v)
@@ -102,9 +103,50 @@ void print_trace(FILE *f)
 		fprintf(log_file, "%s", messages[i]);
 	fprintf(log_file, "---\n");
 }
+
 #else
 #define DO_TRACE(...) 
 #endif
+
+#ifdef TRACE_WRITES
+
+bool trace_writes = true;
+uint32_t write_handle = 0;
+
+void close_write()
+{
+	if (write_handle > 2)
+		fprintf(log_file, "'\n");
+	write_handle = 0;
+}
+
+void write_char(uint32_t h, uint32_t ch)
+{
+	if (h <= 2)
+	{
+		close_write();
+		write_handle = 0;
+		return;
+	}
+	if (write_handle != h)
+	{
+		close_write();
+		fprintf(log_file, "\nwrite to %d: '", h);
+		write_handle = h;
+	}
+	ch = ch & 0xFF;
+	if ((' ' <= ch && ch < 127) || ch == '\n' || ch == '\t') 
+		fprintf(log_file, "%c", ch);
+	else
+		fprintf(log_file, "\\%02x", ch);
+}
+#define CLOSE_WRITE if (trace_writes) close_write();
+#define WRITE_CHAR(H,C) if (trace_writes) write_char(H, C);
+#else
+#define CLOSE_WRITE
+#define WRITE_CHAR(H,C)
+#endif
+
 
 int gen_program_for = -1;
 
@@ -3237,7 +3279,8 @@ public:
 				break;
 				
 			case 0x36:
-				int_ioctl();
+				if (!int_ioctl())
+					return false;
 				break;
 				
 			case 0x37:
@@ -3310,6 +3353,7 @@ public:
 	
 	void int_open_file()
 	{
+		CLOSE_WRITE
 		char filename[500];
 		loadString(_ebx, filename, 500);
 		add_cd_path(filename);
@@ -3336,6 +3380,7 @@ public:
 	
 	void int_close_file()
 	{
+		CLOSE_WRITE
 		for (Usage *use = _process->uses; use != 0; use = use->next_use)
 			if (use->file->fh == (int)_ebx)
 			{
@@ -3351,6 +3396,7 @@ public:
 	
 	void int_wait_pid()
 	{
+		CLOSE_WRITE
 		_eax = 0;
 		if (_ecx != 0)
 			_process->storeDWord(_ecx, _exit_value);
@@ -3358,6 +3404,7 @@ public:
 	
 	void int_unlink()
 	{
+		CLOSE_WRITE
 		char filename[500];
 		loadString(_ebx, filename, 500);
 		add_cd_path(filename);
@@ -3368,6 +3415,7 @@ public:
 	
 	void int_fork()
 	{
+		CLOSE_WRITE
 		if (do_gen)
 		{
 			generate_code(_process);
@@ -3393,6 +3441,7 @@ public:
 	
 	void int_read()
 	{
+		CLOSE_WRITE
 		uint32_t i = 0;
 		for (; i < _edx; i++)
 		{
@@ -3440,6 +3489,7 @@ public:
 					trace(" write %02x from %08x\n", buffer, _ecx + i);
 			}
 #endif
+			WRITE_CHAR(_ebx, buffer);
 			int r = write(_ebx, &buffer, 1);
 			if (r == -1)
 			{
@@ -3454,6 +3504,7 @@ public:
 	
 	bool int_execve()
 	{
+		CLOSE_WRITE
 		char prog_name[500];
 		loadString(_ebx, prog_name, 500);
 
@@ -3567,6 +3618,7 @@ public:
 	
 	void int_chdir()
 	{
+		CLOSE_WRITE
 		char filename[500];
 		loadString(_ebx, filename, 500);
 		DO_TRACE(" chdir(\"%s\") ", filename);
@@ -3604,6 +3656,7 @@ public:
 	
 	void int_lseek()
 	{
+		CLOSE_WRITE
 		DO_TRACE(" lseek\n");
 		_eax = lseek(_ebx, _ecx, _edx);
 	}
@@ -3633,6 +3686,8 @@ public:
 	void int_dup()
 	{
 		_eax = dup(_ebx);
+		CLOSE_WRITE
+		fprintf(stdout, "dup(%d): %d\n", _ebx, _eax);
 	}
 	
 	void int_sys_brk()
@@ -3651,47 +3706,54 @@ public:
 		DO_TRACE(" %08x\n", _eax);
 	}
 	
-	void int_ioctl()
+#define LOAD_BYTES(A,V) if (A != 0) { for (uint32_t i = 0; i < sizeof(V); i++) _process->storeByte((A) + i, ((byte*)&(V))[i]); }
+#define STORE_BYTES(A,V) if (A != 0) { for (uint32_t i = 0; i < sizeof(V); i++) ((byte*)&(V))[i] = _process->loadByte((A) + i); }
+
+	bool int_ioctl()
 	{
-		_eax = ioctl(_ebx, _ecx, _edx);
-		DO_TRACE(" sys_ioctl(%d, %x, %x) : %d\n", _ebx, _ecx, _edx, _eax);
+		switch (_ecx)
+		{
+			case 0x5401: // TCGETS
+				{
+					struct termios term;
+					_eax = ioctl(_ebx, _ecx, &term);
+					STORE_BYTES(_edx, term);
+					DO_TRACE(" sys_ioctl(TCGETS, %x, %x) : %d\n", _ebx, _ecx, _edx, _eax);
+					CLOSE_WRITE
+					fprintf(log_file, " sys_ioctl(%d, %x, %x) : %d\n", _ebx, _ecx, _edx, _eax);
+				}
+				break;
+			default:
+				fprintf(log_file, "Unsupported ioctl call 0x%x (%d)\n", _ebx, _ecx);
+				gen_program();
+				return false;
+		}
+		return true;
 	}
 	
 	void int_fcntl()
 	{
 		_eax = fcntl(_ebx, _ecx, _edx);
 		DO_TRACE(" sys_fcntl(%d, %x, %x) : %d\n", _ebx, _ecx, _edx, _eax);
+		CLOSE_WRITE
+		fprintf(log_file, " sys_fcntl(%d, %x, %x) : %d\n", _ebx, _ecx, _edx, _eax);
 	}
 	
 	void int_gettimeofday()
 	{
-		struct timeval *tv = 0;
 		struct timeval tval;
-		if (_ebx != 0)
-		{
-			for (uint32_t i = 0; i < sizeof(struct timeval); i++)
-				((byte*)&tval)[i] = _process->loadByte(_ebx + i);
-			tv = &tval;
-		}
-		struct timezone *tz = 0;
+		LOAD_BYTES(_ebx, tval);
+
 		struct timezone tzone;
-		if (_ecx != 0)
-		{
-			for (uint32_t i = 0; i < sizeof(struct timezone); i++)
-				((byte*)&tzone)[i] = _process->loadByte(_ecx + i);
-			tz = &tzone;
-		}
-		_eax = gettimeofday(tv, tz);
-		if (tv != 0)
-		{
-			for (uint32_t i = 0; i < sizeof(struct timeval); i++)
-				_process->storeByte(_ebx + i, ((byte*)&tval)[i]);
-		}
-		if (tz != 0)
-		{
-			for (uint32_t i = 0; i < sizeof(struct timezone); i++)
-				_process->storeByte(_ecx + i, ((byte*)&tzone)[i]);
-		}
+		LOAD_BYTES(_ecx, tzone);
+
+		_eax = gettimeofday(&tval, _ecx != 0 ? &tzone : 0);
+
+		STORE_BYTES(_ebx, tval);
+		STORE_BYTES(_ecx, tzone);
+		
+		CLOSE_WRITE
+		fprintf(log_file, " gettimeofday\n");
 	}
 	
 	void int_wait4()
@@ -3705,6 +3767,8 @@ public:
 			for (uint32_t i = 0; i < sizeof(struct rusage); i++)
 				_process->storeByte(_esi + i, 0);
 		}
+		CLOSE_WRITE
+		fprintf(log_file, " wait4\n");
 	}
 	
 	void int_newuname()
@@ -3716,6 +3780,8 @@ public:
 			for (uint32_t i = 0; i < sizeof(struct utsname); i++)
 				_process->storeByte(_ebx + i, 0);
 		}
+		CLOSE_WRITE
+		fprintf(log_file, " newuname\n");
 	}
 	
 	void int_getcwd()
@@ -3747,12 +3813,12 @@ public:
 		clockid_t clockid = (clockid_t)_ebx;
 		struct timespec tp;
 		_eax = clock_gettime(clockid, &tp);
-		fprintf(log_file, "clock_gettime\n");
+		fprintf(log_file, "clock_gettime %x:", _ecx);
+		CLOSE_WRITE
 		for (uint32_t i = 0; i < sizeof(struct timespec); i++)
-		{
-			fprintf(log_file, " store %02x at %x\n", ((byte*)&tp)[i], _ecx + i); 
-			_process->storeByte(_ecx + i, ((byte*)&tp)[i]);
-		}
+			fprintf(log_file, " %02x", ((byte*)&tp)[i]);
+		STORE_BYTES(_ecx, tp);
+		fprintf(log_file, "\n");
 	}
 	
 	void unknownOpcode()
