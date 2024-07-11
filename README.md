@@ -14,10 +14,12 @@ file where all output of the Emulator program will be written to. (Note that the
 are executed can also produce output to `stdout` and `stderr` that will not be written to the
 log file.) There is also an option '-gen' followed by a number, which will cause the Emulator to
 generate a `program.cpp` with the code of the that step. (After this the Emulator terminates.)
-The remainder arguments are the executable and it arguments. When live-bootstrap is located in a
+(When compiled with `-DENABLE_DO_TRACE', the program also except the `-trace` and `-trace_mem`
+options to activate tracing. This is primarily for debugging purposes and will generate lots of
+output.) The remainder arguments are the executable and it arguments. When live-bootstrap is located in a
 sibling directory, the following command can be used:
 ```
-./Emulator ../live-bootstrap/ bootstrap-seeds/POSIX/x86/kaem-optional-seed  kaem.x86
+./Emulator ../live-bootstrap/seed/stage0-posix/ bootstrap-seeds/POSIX/x86/kaem-optional-seed  kaem.x86
 ```
 The results of the execution will be placed in the `results` directory (and sub directories), which
 are automatically created.

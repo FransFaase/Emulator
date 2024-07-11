@@ -1530,6 +1530,17 @@ public:
 		_ebp = 0;
 		for (;;)
 		{
+			if (_pc < _process->start_code || _pc > _process->end_code)
+			{
+#ifdef ENABLE_DO_TRACE
+				print_trace(log_file);
+#endif
+				gen_program();
+				fprintf(log_file, "Program counter %08x outside code [%08x - %08x] %s\n", 
+					_pc, _process->start_code, _process->end_code, _process->name);
+				return;
+			}
+			
 			START_INST(_pc);
 			DO_TRACE("%08x ", _pc);
 			byte opcode = getPC();
@@ -1688,6 +1699,11 @@ public:
 							opcode = getPC();
 							switch (opcode)
 							{
+								case 0x00:
+									CODE(_eax = _process->loadByte(_eax));
+									DO_TRACE(" movzx (_eax), _eax: %08x\n", _eax);
+									break;
+
 								case 0xC0:
 									CODE(_eax = _eax & 0xFF);
 									DO_TRACE(" movzx _eax: %08x\n", _eax);
@@ -3934,6 +3950,16 @@ private:
 
 Process *mainProcess(int argc, char *argv[])
 {
+	if (argc == 1)
+	{
+		printf("Usage:\n  %s [-l <logfilename>] [-gen <procnr>]", argv[0]);
+#ifdef ENABLE_DO_TRACE
+		printf(" [-trace] [-trace_mem]");
+#endif
+		printf(" <sourced_dir> <exec> [<args>]\n");
+		return 0;
+	}
+			
 	int i = 1;
 	source_dir = 0;
 	while (i < argc)
@@ -3956,6 +3982,20 @@ Process *mainProcess(int argc, char *argv[])
 			i += 2;
 			fprintf(stderr, "Generate program for %d\n", gen_program_for);
 		}
+#ifdef ENABLE_DO_TRACE
+		else if (strcmp(arg, "-trace") == 0)
+		{
+			fprintf(stderr, "DO TRACE\n");
+			do_trace = true;
+			i++;
+		}
+		else if (strcmp(arg, "-trace_mem") == 0)
+		{
+			fprintf(stderr, "DO MEM TRACE\n");
+			trace_mem = true;
+			i++;
+		}
+#endif
 		else if (source_dir == 0)
 		{
 			fprintf(stderr, "Source dir: '%s'\n", arg);
@@ -3970,7 +4010,12 @@ Process *mainProcess(int argc, char *argv[])
 		fprintf(log_file, "No source directory has been specified\n");
 		return 0;
 	}
-	if (i + 1 >= argc)
+	if (source_dir[strlen(source_dir)-1] != '/')
+	{
+		fprintf(log_file, "No source directory should end with '/'\n");
+		return 0;
+	}
+	if (i >= argc)
 	{
 		fprintf(log_file, "Nothing to execute\n");
 		return 0;
@@ -3994,6 +4039,13 @@ Process *mainProcess(int argc, char *argv[])
 	{
 		fprintf(log_file, "Failed to load '%s' as ELF\n", argv[i]);
 		return 0;
+	}
+
+	if (main_process->nr == gen_program_for)
+	{
+		main_process->functionNames = read_function_names();
+		init_statements(main_process->start_code, main_process->end_code);
+		start_pc = main_process->pc;
 	}
 	
 	char *env[1] = { 0 };
