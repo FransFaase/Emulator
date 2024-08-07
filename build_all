@@ -1,0 +1,10 @@
+#!/bin/bash
+g++ -g Emulator.cpp -o Emulator
+g++ -DENABLE_DO_TRACE -g Emulator.cpp -o Emulator
+g++ -DTRACE_MEMORY -g Emulator.cpp -o Emulator
+g++ -DTRACE_WRITES -g Emulator.cpp -o Emulator
+g++ -DCATCH_SEGFAULT -g Emulator.cpp -o Emulator
+g++ -DENABLE_DO_TRACE -DTRACE_MEMORY -g Emulator.cpp -o Emulator
+g++ -DENABLE_DO_TRACE -DTRACE_MEMORY -DTRACE_WRITES -g Emulator.cpp -o Emulator
+g++ -DENABLE_DO_TRACE -DCATCH_SEGFAULT -g Emulator.cpp -o Emulator
+g++ -DENABLE_DO_TRACE -DTRACE_MEMORY -DTRACE_WRITES -DCATCH_SEGFAULT -g Emulator.cpp -o Emulator
