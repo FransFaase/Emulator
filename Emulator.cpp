@@ -2,6 +2,7 @@
 	http://ref.x86asm.net/geek.html
 	https://www.felixcloutier.com/x86/
 	https://faculty.nps.edu/cseagle/assembly/sys_call.html
+	https://syscalls.mebeim.net/?table=x86/64/x64/latest
 */
 #include <malloc.h>
 #include <stdio.h>
@@ -45,7 +46,6 @@ bool do_trace = false;
 bool do_trace_call = false;
 bool out_trace = false;
 int nr_ret;
-bool trace_mem = false;
 
 void trace(const char* format, ...)
 {
@@ -65,9 +65,9 @@ void trace(const char* format, ...)
 		s += strlen(s);	
 		vsnprintf(s, MAX_MESSAGE_LEN - 20, format, argp);
 	}
+	messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
 	if (out_trace)
 		fprintf(log_file, "%s", messages[message_nr]);
-	messages[message_nr][MAX_MESSAGE_LEN-1] = '\0';
 	if (++message_nr >= MAX_NR_MESSAGES)
 	{
 		message_nr = 0;
@@ -95,6 +95,8 @@ void trace_ni(const char* format, ...)
 
 void print_trace(FILE *f)
 {
+	if (out_trace)
+		return;
 	fprintf(log_file, "---\n");
 	if (message_round)
 		for (int i = message_nr; i < MAX_NR_MESSAGES; i++)
@@ -106,6 +108,10 @@ void print_trace(FILE *f)
 
 #else
 #define DO_TRACE(...) 
+#endif
+
+#ifdef TRACE_MEMORY
+bool trace_mem = false;
 #endif
 
 #ifdef TRACE_WRITES
@@ -446,6 +452,45 @@ public:
 	}
 };
 
+#ifdef CATCH_SEGFAULT
+#ifdef ENABLE_DO_TRACE
+#define CHECK_MEM(A) if (memory[(uint16_t)(A >> 16)] == 0) { print_trace(log_file); fprintf(log_file, "Segmentation fault at %x\n", A); exit(0); }
+#else
+#define CHECK_MEM(A) if (memory[(uint16_t)(A >> 16)] == 0) { fprintf(log_file, "Segmentation fault at %x\n", A); exit(0); }
+#endif
+#else
+#define CHECK_MEM(A)
+#endif
+
+#define CALL_STACK_CHECK
+#ifdef CALL_STACK_CHECK
+uint32_t call_stack[100];
+int call_stack_depth = 0;
+uint32_t call_stack_top = 0xffffffff; 
+
+void call_stack_call(uint32_t sp)
+{
+	call_stack_top = call_stack[call_stack_depth++] = sp;
+}
+
+void call_stack_return(uint32_t sp)
+{
+	call_stack_depth--;
+	if (call_stack[call_stack_depth] != sp - 4)
+	{
+		fprintf(log_file, "Ret %x does not match call %x\n", sp - 4, call_stack[call_stack_depth]);
+		
+		exit(1);
+	}
+	call_stack_top = call_stack_depth > 0 ? call_stack[call_stack_depth - 1] : 0xffffffff; 
+}
+
+#define CALL_STACK_CALL call_stack_call(_process->sp);
+#define CALL_STACK_RETURN call_stack_return(_process->sp);
+#else
+#define CALL_STACK_CALL
+#define CALL_STACK_RETURN
+#endif
 
 class Process
 {
@@ -579,10 +624,18 @@ public:
 	
 	byte loadByte(uint32_t address)
 	{
+		CHECK_MEM(address)
 #ifdef TRACE_MEMORY
 		byte result = memory[(uint16_t)(address >> 16)][(address & 0xffff)];
 		if (trace_mem)
+		{
+#ifdef ENABLE_DO_TRACE
+			if (do_trace)
+				trace("Load %02x from %08x\n", result, address);
+			else
+#endif
 			fprintf(log_file, "Load %02x from %08x\n", result, address);
+		}
 		return result;
 #else
 		return memory[(uint16_t)(address >> 16)][(address & 0xffff)];
@@ -599,21 +652,45 @@ public:
 
 	void storeByte(uint32_t address, byte value)
 	{
+		CHECK_MEM(address)
 #ifdef TRACE_MEMORY
 		if (trace_mem)
+		{
+#ifdef ENABLE_DO_TRACE
+			if (do_trace)
+				trace("Store %02x at %08x\n", value, address);
+			else
+#endif
 			fprintf(log_file, "Store %02x at %08x\n", value, address);
+		}
+#endif
+#ifdef ENABLE_DO_TRACE
+		if (address == 0x080500e4 && value == 1)
+		{
+			printf("Assign 0x080500e4 with 1\n");
+			print_trace(log_file);
+			exit(1);
+		}
 #endif
 		memory[(uint16_t)(address >> 16)][(address & 0xffff)] = value;
 	}
 
 	uint32_t loadDWord(uint32_t address)
 	{
+		CHECK_MEM(address)
 		if ((address & 0x3) == 0)
 		{
 #ifdef TRACE_MEMORY
 			uint32_t value = *(uint32_t*)(memory[(uint16_t)(address >> 16)] + (address & 0xffff));
 			if (trace_mem)
+			{
+#ifdef ENABLE_DO_TRACE
+				if (do_trace)
+					trace("Load %08x from %08x\n", value, address);
+				else
+#endif
 				fprintf(log_file, "Load %08x from %08x\n", value, address);
+			}
 			return value;
 #else
 			return *(uint32_t*)(memory[(uint16_t)(address >> 16)] + (address & 0xffff));
@@ -622,14 +699,24 @@ public:
 		uint32_t value;
 		value  = memory[(uint16_t)(address >> 16)][(address & 0xffff)];
 		address++;
+		CHECK_MEM(address)
 		value |= memory[(uint16_t)(address >> 16)][(address & 0xffff)] << 8;
 		address++;
+		CHECK_MEM(address)
 		value |= memory[(uint16_t)(address >> 16)][(address & 0xffff)] << 16;
 		address++;
+		CHECK_MEM(address)
 		value |= memory[(uint16_t)(address >> 16)][(address & 0xffff)] << 24;
 #ifdef TRACE_MEMORY
 		if (trace_mem)
+		{
+#ifdef ENABLE_DO_TRACE
+			if (do_trace)
+				trace("Load %08x from %08x\n", value, address);
+			else
+#endif
 			fprintf(log_file, "Load %08x from %08x\n", value, address);
+		}
 #endif
 		return value;
 	}
@@ -638,8 +725,24 @@ public:
 	{
 #ifdef TRACE_MEMORY
 		if (trace_mem)
-			fprintf(log_file, "Store %08x at %08x\n", value, address);
+		{
+#ifdef ENABLE_DO_TRACE
+			if (do_trace)
+				trace("Store %08x at %08x\n", value, address);
+			else
 #endif
+			fprintf(log_file, "Store %08x at %08x\n", value, address);
+		}
+#endif
+#ifdef ENABLE_DO_TRACE
+		if (address >= call_stack_top)
+		{
+			//printf("\nWarning: Assign %x to %x above %x\n", value, address, call_stack_top);
+			//print_trace(log_file);
+			//exit(1);
+		}
+#endif
+		CHECK_MEM(address)
 		if ((address & 0x3) == 0)
 		{
 			*(uint32_t*)(memory[(uint16_t)(address >> 16)] + (address & 0xffff)) = value;
@@ -648,12 +751,15 @@ public:
 		{
 			memory[(uint16_t)(address >> 16)][(address & 0xffff)] = value & 0xff;
 			address++;
+			CHECK_MEM(address)
 			value = value >> 8;
 			memory[(uint16_t)(address >> 16)][(address & 0xffff)] = value & 0xff;
 			address++;
+			CHECK_MEM(address)
 			value = value >> 8;
 			memory[(uint16_t)(address >> 16)][(address & 0xffff)] = value & 0xff;
 			address++;
+			CHECK_MEM(address)
 			value = value >> 8;
 			memory[(uint16_t)(address >> 16)][(address & 0xffff)] = value & 0xff;
 		}
@@ -663,7 +769,15 @@ public:
 	{
 		sp -= 4;
 #ifdef TRACE_MEMORY
-		if (trace_mem) fprintf(log_file, "push %08x to %08x\n", value, sp);
+		if (trace_mem)
+		{
+#ifdef ENABLE_DO_TRACE
+			if (do_trace)
+				trace("push %08x to %08x\n", value, sp);
+			else
+#endif
+			fprintf(log_file, "push %08x to %08x\n", value, sp);
+		}
 		else { DO_TRACE("push %08x to %08x\n", value, sp); }
 #endif
 		if (sp < _sp_allocated)
@@ -678,7 +792,15 @@ public:
 	{
 		sp--;
 #ifdef TRACE_MEMORY
-		if (trace_mem) fprintf(log_file, "push %08x to %08x\n", value, sp);
+		if (trace_mem)
+		{
+#ifdef ENABLE_DO_TRACE
+			if (do_trace)
+				trace("push %02x to %08x\n", value, sp);
+			else
+#endif
+			fprintf(log_file, "push %02x to %08x\n", value, sp);
+		}
 		else { DO_TRACE("push %08x to %08x\n", value, sp); }
 #endif
 		if (sp < _sp_allocated)
@@ -698,7 +820,15 @@ public:
 		}
 		uint32_t value = *(uint32_t*)(memory[(uint16_t)(sp >> 16)] + (sp & 0xffff));
 #ifdef TRACE_MEMORY
-		if (trace_mem) fprintf(log_file, "pop %08x from %08x\n", value, sp);
+		if (trace_mem)
+		{
+#ifdef ENABLE_DO_TRACE
+			if (do_trace)
+				trace("pop %08x from %08x\n", value, sp);
+			else
+#endif
+			fprintf(log_file, "pop %08x from %08x\n", value, sp);
+		}
 		else { DO_TRACE("pop %08x from %08x\n", value, sp); }
 #endif
 		sp += 4;
@@ -1490,7 +1620,7 @@ bool loadELF(ProgramFile *file, Process *process)
 
 					//fprintf(log_file, "%08x %08x %08x %02x %02x %02x %02x '%s'\n",
 					//	st_name, st_value, st_size, st_info, st_other, st_shndx1, st_shndx2, symname);
-					//fprintf(log_file, "%08x %s\n", st_value, symname);
+					fprintf(log_file, "%08x %s\n", st_value, symname);
 
 					process->functionNames = new FunctionName(st_value, symname, process->functionNames);
 				}
@@ -3061,8 +3191,9 @@ public:
 				case 0xC3:
 					CODE(_pc = _process->pop());
 					CODE_RETURN;
-					DO_TRACE(" ret to %02x\n\n", _pc);
 					indent_depth -= 2;
+					DO_TRACE(" ret to %02x (SP=%x)\n\n", _pc, _process->sp - 4);
+					CALL_STACK_RETURN
 #ifdef ENABLE_DO_TRACE
 					if (out_trace && --nr_ret == 0)
 						out_trace = false;
@@ -3134,9 +3265,10 @@ public:
 						CODE(_process->push(_pc));
 						CODE_CALL(_pc + offset, 0);
 						_pc += offset;
-						DO_TRACE(" call %s\n\n", _process->name_for_function(_pc, -1));
+						CALL_STACK_CALL
+						DO_TRACE(" call %s (SP=%x)\n\n", _process->name_for_function(_pc, -1), _process->sp);
 #ifdef ENABLE_DO_TRACE
-						if (do_trace_call && !do_trace) trace(" call %s\n", _process->name_for_function(_pc, -1));
+						if (do_trace_call && !do_trace) trace(" call %s (SP=%x)\n", _process->name_for_function(_pc, -1), _process->sp);
 #endif
 						indent_depth += 2;
 					}
@@ -3207,7 +3339,8 @@ public:
 							CODE(_process->push(_pc));
 							CODE_CALL(_eax, "eax");
 							_pc = _eax;
-							DO_TRACE(" call_eax %08x\n\n", _pc);
+							CALL_STACK_CALL
+							DO_TRACE(" call_eax %s (SP=%x)\n\n", _process->name_for_function(_pc, -1), _process->sp);
 							indent_depth += 2;
 							break;
 
@@ -3619,10 +3752,12 @@ public:
 #ifdef ENABLE_DO_TRACE
 			do_trace = true;
 			//out_trace = true;
+#endif
+#ifdef TRACE_MEMORY
 			//trace_mem = true;
 #endif
 		}
-		if (_process->nr == gen_program_for)
+		if (_process->nr == gen_program_for && _process->functionNames == 0)
 		{
 			_process->functionNames = read_function_names();
 			init_statements(_process->start_code, _process->end_code);
@@ -3954,7 +4089,10 @@ Process *mainProcess(int argc, char *argv[])
 	{
 		printf("Usage:\n  %s [-l <logfilename>] [-gen <procnr>]", argv[0]);
 #ifdef ENABLE_DO_TRACE
-		printf(" [-trace] [-trace_mem]");
+		printf(" [-trace]");
+#endif
+#ifdef TRACE_MEMORY
+		printf(" [-trace_mem]");
 #endif
 		printf(" <sourced_dir> <exec> [<args>]\n");
 		return 0;
@@ -3989,6 +4127,15 @@ Process *mainProcess(int argc, char *argv[])
 			do_trace = true;
 			i++;
 		}
+		else if (strcmp(arg, "-trace_all") == 0)
+		{
+			fprintf(stderr, "DO TRACE\n");
+			do_trace = true;
+			out_trace = true;
+			i++;
+		}
+#endif
+#ifdef TRACE_MEMORY
 		else if (strcmp(arg, "-trace_mem") == 0)
 		{
 			fprintf(stderr, "DO MEM TRACE\n");
@@ -4041,7 +4188,7 @@ Process *mainProcess(int argc, char *argv[])
 		return 0;
 	}
 
-	if (main_process->nr == gen_program_for)
+	if (main_process->nr == gen_program_for && main_process->functionNames == 0)
 	{
 		main_process->functionNames = read_function_names();
 		init_statements(main_process->start_code, main_process->end_code);

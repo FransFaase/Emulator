@@ -4,26 +4,5 @@ rm -rf rootfs_AMD64
 mkdir rootfs_AMD64
 cd rootfs_AMD64
 cp -r -t . ../../live-bootstrap/seed/stage0-posix/*
-# cp -rf -t . ../../live-bootstrap/seed/*.kaem
-# cp -r -t . ../../live-bootstrap/seed/*.checksums
-# cp -r -t . ../../live-bootstrap/seed/*.c
-# cp -r -t . ../../live-bootstrap/steps
-# mkdir external
-# cp -r -t external ../../live-bootstrap/distfiles
-# echo ARCH=AMD64 >steps/bootstrap.cfg
-# echo ARCH_DIR=/AMD64 >>steps/bootstrap.cfg
-# echo FORCE_TIMESTAMPS=False >>steps/bootstrap.cfg
-# echo CHROOT=True >>steps/bootstrap.cfg
-# echo UPDATE_CHECKSUMS=False >>steps/bootstrap.cfg
-# echo JOBS=1 >>steps/bootstrap.cfg
-# echo SWAP_SIZE=0 >>steps/bootstrap.cfg
-# echo FINAL_JOBS=1 >>steps/bootstrap.cfg
-# echo INTERNAL_CI=False >>steps/bootstrap.cfg
-# echo INTERACTIVE=False >>steps/bootstrap.cfg
-# echo BARE_METAL=False >>steps/bootstrap.cfg
-# echo DISK=sda1 >>steps/bootstrap.cfg
-# echo KERNEL_BOOTSTRAP=False >>steps/bootstrap.cfg
-# echo BUILD_KERNELS=False >>steps/bootstrap.cfg
-# cp ../replacement/steps/bootstrap.cfg steps
 cd ..
 strace -f -o trace_AMD64.txt -e trace=open,openat,close,chmod,chdir,dup,fcntl,link,linkat,unlink,fork,execve chroot rootfs_AMD64 /bootstrap-seeds/POSIX/AMD64/kaem-optional-seed
