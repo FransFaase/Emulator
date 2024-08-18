@@ -14,8 +14,8 @@ file where all output of the Emulator program will be written to. (Note that the
 are executed can also produce output to `stdout` and `stderr` that will not be written to the
 log file.) There is also an option '-gen' followed by a number, which will cause the Emulator to
 generate a `program.cpp` with the code of the that step. (After this the Emulator terminates.)
-(When compiled with `-DENABLE_DO_TRACE', the program also excepts the `-trace` and when
-compiled with '-DTRACE_MEMORY, the program also excepts the `-trace_mem` options to activate tracing.
+(When compiled with `-DENABLE_DO_TRACE`, the program also excepts the `-trace` and when
+compiled with `-DTRACE_MEMORY`, the program also excepts the `-trace_mem` options to activate tracing.
 These are primarily for debugging purposes and will generate lots of output.) The remainder arguments
 are the executable and it arguments. When live-bootstrap is located in a sibling directory, the
 following command can be used:
