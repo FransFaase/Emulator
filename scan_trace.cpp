@@ -577,15 +577,25 @@ void read_filename(char *filename, char *&s)
 	add_cd_path(filename);
 }
 
-
+#define NR_PARR_COMMANDS 4
 		
-bool process_trace_file()
+bool process_trace_file(const char *trace_fn)
 {
-	FILE *f = fopen("trace.txt", "r");
+	FILE *f = fopen(trace_fn, "r");
 	
 	FILE *fout_usage = 0;
 	
 	char buffer[10000];
+	
+	struct Command
+	{
+		bool active;
+		unsigned long pid;
+		char cmd[10000];
+	};
+	Command cmd[NR_PARR_COMMANDS];
+	for (int i = 0; i < NR_PARR_COMMANDS; i++)
+		cmd[i].active = false;
 
 	long line_nr = 0;
 	
@@ -612,8 +622,74 @@ bool process_trace_file()
 		while (*s == ' ' || *s == '\t')
 			s++;
 		//fprintf(fout, "%lu: %s", pid, s);
+		if (strncmp(s, "<... ", 5) == 0)
+		{
+			printf("DEBUG: resumd\n");
+			char *ns = strstr(s, "resumed>");
+			if (ns == 0)
+			{
+				printf("Line '%s' expect 'resumed>'\n", buffer);
+				return false;
+			}
+			s = ns + 8;
+			bool found = false;
+			for (int i = 0; i < NR_PARR_COMMANDS; i++)
+				if (cmd[i].active && cmd[i].pid == pid)
+				{
+					printf("DEBUG: more resumed: '%s'\n", s);
+					strcat(cmd[i].cmd, s);
+					printf("DEBUG: makes: '%s'\n", cmd[i].cmd);
+					char *s_unf = strstr(cmd[i].cmd, " <unfinished ...>");
+					if (s_unf != 0)
+					{
+						*s_unf = '\0';
+						s = 0;
+					}
+					else
+					{
+						cmd[i].active = false;
+						s = cmd[i].cmd;
+					}
+					found = true;
+					break;
+				}
+			if (!found)
+			{
+				printf("Line: '%s' is not correct continuation\n", buffer);
+				return false;
+			}
+		}
+		else if (strstr(s, " <unfinished ...>") != 0)
+		{
+			bool found = false;
+			for (int i = 0; i < NR_PARR_COMMANDS; i++)
+				if (!cmd[i].active)
+				{
+					cmd[i].active = true;
+					cmd[i].pid = pid;
+					strcpy(cmd[i].cmd, s);
+					char *s_unf = strstr(cmd[i].cmd, " <unfinished ...>");
+					if (s_unf != 0)
+					{
+						*s_unf = '\0';
+						s = 0;
+					}
+					printf("DEBUG: Unfinshed %lu: '%s'\n", pid, cmd[i].cmd);
+					found = true;
+					break;
+				}
+			if (!found)
+			{
+				printf("Line: '%s' too many parralel commands. Increase NR_PARR_COMMANDS\n", buffer);
+				return false;
+			}
+		}
 		
-		if (accept_string("execve(", s))
+		if (s == 0)
+		{
+			// nothing to process
+		}
+		else if (accept_string("execve(", s))
 		{
 			read_filename(filename, s);
 			File *exec_file = get_file(filename);
@@ -1185,7 +1261,7 @@ int main(int argc, char *argv[])
 
 	init_subModules();
 	
-	if (!process_trace_file())
+	if (!process_trace_file("trace.txt"))
 		return 0;
 	
 	for (Process *process = all_processes; process != 0; process = process->next)
