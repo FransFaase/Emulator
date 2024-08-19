@@ -462,7 +462,6 @@ public:
 #define CHECK_MEM(A)
 #endif
 
-#define CALL_STACK_CHECK
 #ifdef CALL_STACK_CHECK
 uint32_t call_stack[100];
 int call_stack_depth = 0;
@@ -479,7 +478,9 @@ void call_stack_return(uint32_t sp)
 	if (call_stack[call_stack_depth] != sp - 4)
 	{
 		fprintf(log_file, "Ret %x does not match call %x\n", sp - 4, call_stack[call_stack_depth]);
-		
+#ifdef ENABLE_DO_TRACE
+		print_trace(log_file);
+#endif
 		exit(1);
 	}
 	call_stack_top = call_stack_depth > 0 ? call_stack[call_stack_depth - 1] : 0xffffffff; 
@@ -734,7 +735,7 @@ public:
 			fprintf(log_file, "Store %08x at %08x\n", value, address);
 		}
 #endif
-#ifdef ENABLE_DO_TRACE
+#if defined(ENABLE_DO_TRACE) && defined(CALL_STACK_CHECK)
 		if (address >= call_stack_top)
 		{
 			//printf("\nWarning: Assign %x to %x above %x\n", value, address, call_stack_top);
@@ -2333,6 +2334,12 @@ public:
 							DO_TRACE(" add_ebp %08x: %08x\n", val32, _ebp);
 							break;
 								
+						case 0xED: /* for stack_c.cpp */
+							val32 = getLongPC();
+							CODE_V32(_ebp -= val32);
+							DO_TRACE(" sub_ebp,%08x: %08x\n", val32, _ebp);
+							break;
+							
 						default:
 							unknownOpcode();
 							return;
@@ -2826,6 +2833,12 @@ public:
 							DO_TRACE(" mov_eax,[ebx:%08x] %08x\n", _ebx, _eax);
 							break; 
 						
+						case 0x05: /* for stack_c.cpp */
+							val32 = getLongPC();
+							CODE_V32(_eax = _process->loadDWord(val32));
+							DO_TRACE(" mov_eax,[%08x] %08x\n", val32, _eax);
+							break;
+						
 						case 0x09:
 							CODE(_ecx = _process->loadDWord(_ecx));
 							DO_TRACE(" mov_eax,[ecx] %08x\n", _ecx);
@@ -2999,6 +3012,12 @@ public:
 							}
 							break;
 						
+						case 0x85: /* for stack_c.cpp */
+							val32 = getLongPC();
+							CODE_V32(_eax = _process->loadDWord(_ebp + val32));
+							DO_TRACE(" mov_eax: %08x from memory[%08x + %08x]\n", _eax, _ebp, val32);
+							break;
+						
 						default: 
 							unknownOpcode();
 							return;
@@ -3060,6 +3079,12 @@ public:
 									unknownOpcode();
 									return;
 							}
+							break;
+						
+						case 0x8D: /* for stack_c.cpp */
+							val32 = getLongPC();
+							CODE_V32(_ecx = _ebp + val32);
+							DO_TRACE(" mov_ecx: %08x with %08x + %08x\n", _ecx, _ebp, val32);
 							break;
 						
 						case 0x94:
