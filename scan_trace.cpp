@@ -328,16 +328,22 @@ class Action
 	File *file;
 	Process *process;
 	
+	char json_kind;
+	Process *file_created_by;
+
 	Action *next_in_process;
 	Action *next_on_file;
 	
 	Action (File *_file, Process *_process, char _kind)
-	: kind(_kind), 
+	: kind(_kind),
 	  o_rdonly(false), o_wronly(false), o_rdwr(false), o_creat(false), o_trunc(false), o_excl(false), file_handle(-1), is_closed(false),
 	  mode(0),
 	  from_archive(false),
 	  child_process(0), 
-	  file(_file), process(_process), next_in_process(0), next_on_file(0)
+	  file(_file), process(_process),
+	  json_kind(_kind),
+	  file_created_by(0),
+	  next_in_process(0), next_on_file(0)
 	{
 		Action **ref_action_in_process = &process->actions;
 		while (*ref_action_in_process != 0) ref_action_in_process = &(*ref_action_in_process)->next_in_process;
@@ -360,7 +366,9 @@ class Action
 			   o_wronly ? "Writes" :
 			   o_rdwr ? "Modifies" :
 			   "Uses";
-	}	
+	}
+	
+	bool is_input() { return kind == 'o' && !is_produced() && o_rdonly; }	
 	
 	bool is_produced() { return kind == 'o' && (o_creat || ((o_wronly || o_rdwr) && o_trunc)); }
 };
@@ -1255,6 +1263,338 @@ void write_html(FILE *f)
 		"</BODY></HTML>\n");
 }
 
+void write_json(FILE *f)
+{
+	// calculate json_kind and file_created_by
+	for (File *file = files; file != 0; file = file->next)
+	{
+		bool file_exists = false;
+		Process *file_created_by = 0;
+		for (Action *action = file->actions; action != 0; action = action->next_on_file)
+		{
+			if (action->kind == 'r')
+				file_exists = false;
+			else if (action->kind == 'o')
+			{
+				if (action->o_rdonly)
+					action->json_kind = 'R';
+				else if (!file_exists || action->o_wronly)
+				{
+					action->json_kind = 'W';
+					file_exists = true;
+					file_created_by = action->process;
+				}
+				else
+					action->json_kind = 'M';
+			}
+			action->file_created_by = file_created_by;
+		}
+	}
+
+	fprintf(f, "var data = {\n  processes:[\n");
+	for (Process *process = all_processes; process != 0; process = process->next)
+	{
+		fprintf(f, "\t{ nr:%d, x:null, y:0, w:0, h:0, ie:\"\", iw:0, oe:\"\", ow:0, elf:null, ins:[], outs:[]", process->nr);
+		if (process->parent != 0)
+			fprintf(f, ", parent:%d", process->parent->nr);
+		fprintf(f, ", actions:[");
+		bool first = true;
+		bool is_M2_Mesoplanet = false;
+		for (Action *action = process->actions; action != 0; action = action->next_in_process)
+		{
+			// Some clean-up for M2_Mesoplanet driver program
+			if (action->kind == 'e' && (strcmp(action->file->name, "/x86/bin/M2-Mesoplanet") == 0 || strcmp(action->file->name, "/usr/bin/M2-Mesoplanet") == 0))
+				is_M2_Mesoplanet = true;
+			if (is_M2_Mesoplanet)
+			{
+				if (action->json_kind == 'W' && strstr(action->file->name, "/M2-Mesoplanet-000000") == 0)
+					continue;
+				if (action->json_kind == 'R' && action->next_in_process != 0 && action->next_in_process->kind == 'E')
+					continue;
+			}
+			if (   action->json_kind == 'R' && action->next_in_process != 0 && action->next_in_process->kind == 'E'
+				&& action->next_on_file != 0 && action->next_on_file->kind == 'e' 
+				&& action->next_in_process->child_process == action->next_on_file->process)
+				continue;
+			
+			if (action->json_kind == 'R')
+			{
+				bool already_include = false;
+				for (Action *prev_action = process->actions; prev_action != action; prev_action = prev_action->next_in_process)
+					if (prev_action->json_kind == 'R' && prev_action->file == action->file)
+					{
+						already_include = true;
+						break;
+					}
+				if (already_include)
+					continue;
+			}
+
+			fprintf(f, "%s\n\t\t{ kind:\"%c\"", first ? "" : ",", action->json_kind);
+			if (action->file != 0)
+			{
+				fprintf(f, ", file:%d", action->file->nr);
+				if (action->file_created_by != 0)
+					fprintf(f, ", by:%d", action->file_created_by->nr);
+			}
+			if (action->child_process != 0)
+				fprintf(f, ", child:%d", action->child_process->nr);
+			fprintf(f, " }");
+			first = false;
+		}
+		fprintf(f, "%s}%s\n", first ? "] \n" : "\n\t  ]\n\t", process->next != 0 ? "," : "");
+	}
+	fprintf(f, "  ],\n  files:[\n");
+
+	for (File *file = files; file != 0; file = file->next)
+	{
+		fprintf(f, "\t{ nr:%d, name:\"%s\", type:\"%s\", x:null, y:0, label:\"\", w:0", file->nr, file->name,
+				file->exec_before_created() ? "seed" : "");
+		if (file->is_source && file->source_name != 0)
+			fprintf(f, ", src:\"%s\"",
+					file->source_name + (strncmp(file->source_name, source_dir, len_source_dir) == 0 ? len_source_dir : 0));
+		if (file->url != 0)
+			fprintf(f, ", url:\"%s\"", file->url);
+		if (file->copy_from != 0)
+			fprintf(f, ", copy_from:%d", file->copy_from->nr);
+		fprintf(f, ", actions:[");
+		bool first = true;
+		Action *prev_action = 0;
+		for (Action *action = file->actions; action != 0; action = action->next_on_file)
+		{
+			if (prev_action == 0 || prev_action->json_kind != prev_action->json_kind || action->process->nr != prev_action->process->nr)
+			{
+				fprintf(f, "%s\n\t\t{ kind:\"%c\", proc:%d }", first ? "" : ",", action->json_kind, action->process->nr);
+				first = false;
+			}
+			prev_action = action;
+		}
+		fprintf(f, "%s]", first ? "" : "\n\t  ");
+		if (file->is_source && file->source_name != 0)
+		{
+			size_t len = strlen(file->source_name);
+			
+			if (   (len <= 7 || strcmp(file->source_name + len - 7, ".tar.gz") != 0)
+				&& (len <= 8 || strcmp(file->source_name + len - 8, ".tar.bz2") != 0))
+			{
+				FILE *f_source = fopen(file->source_name, "r");
+				if (f_source != 0)
+				{
+					fprintf(f, ",\n\t  lines:[\n");
+					if (file->exec_before_created())
+					{
+						fprintf(f, "\t\t\"");
+						int i = 0;
+						unsigned char ch = fgetc(f_source);
+						while (!feof(f_source))
+						{
+							if (i == 10)
+							{
+								fprintf(f, "\",\n\t\t\"");
+								i = 0;
+							}
+							fprintf(f, "%s%02X", i == 0 ? "" : " ", ch);
+							i++;
+							ch = fgetc(f_source);
+						}
+						fprintf(f, "\"\n");
+					}
+					else
+					{
+						char ch = fgetc(f_source);
+						bool first = true;
+						if (ch != -1)
+						{
+							int col = 0;
+							bool in_line = false;
+							while (!feof(f_source))
+							{
+								if (ch == '\n' && in_line)
+								{
+									fprintf(f, "\"");
+									in_line = false;
+									ch = fgetc(f_source);
+									col = 0;
+									continue;
+								}
+								if (!in_line)
+								{
+									fprintf(f, "%s\t\t\"", first ? "" : ",\n");
+									first = false;
+									if (ch == '\n')
+									{
+										fprintf(f, "\"");
+										ch = fgetc(f_source);
+										continue;
+									}
+									in_line = true;
+								}
+								if (ch < ' ')
+								{
+									ch = fgetc(f_source);
+									continue;
+								}
+								col++;
+								if (ch == '"')
+									fprintf(f, "\\" "\"");
+								else if (ch == '\\')
+									fprintf(f, "\\\\");
+								else if (ch == '<')
+									fprintf(f, "&lt;");
+								else if (ch == '>')
+									fprintf(f, "&gt;");
+								else if (ch == '&')
+									fprintf(f, "&amp;");
+								else if ((unsigned char)ch == 160)
+									fprintf(f, "&nbsp;");
+								else if ((unsigned char)ch == 169)
+									fprintf(f, "&copy;");
+								else if ((unsigned char)ch == 194)
+									fprintf(f, "&Acirc;");
+								else if ((unsigned char)ch == 195)
+									fprintf(f, "&Atilde;");
+								else if ((unsigned char)ch == 197)
+									fprintf(f, "&Aring;");
+								else if ((unsigned char)ch == 216)
+									fprintf(f, "&Oslash;");
+								else if ((unsigned char)ch == 231)
+									fprintf(f, "&ccedil;");
+								else if ((unsigned char)ch == 246)
+									fprintf(f, "&ouml;");
+								else if (ch < 0)
+									fprintf(f, "&#%d;", (unsigned char)ch);
+								else if (ch == '\t')
+								{
+									fprintf(f, " ");
+									while (col % 4 > 0)
+									{
+										fprintf(f, " ");
+										col++;
+									}
+								}
+								else
+									fprintf(f, "%c", ch);
+								ch = fgetc(f_source);
+							}
+							if (col > 0)
+								fprintf(f, "\"\n");
+						}
+					}
+					fprintf(f, "\t  ]\n");
+				}
+			}
+		}
+		fprintf(f, "%s}", first && !file->is_source ? " " : "\t");
+		fprintf(f, "%s\n", file->next != 0 ? "," : "");
+	}
+	fprintf(f, "  ]\n");
+	fprintf(f, "}\n");
+	return;
+		 
+	for (Process *process = all_processes; process != 0; process = process->next)
+	{
+		fprintf(f, "<H3><A NAME=\"S%d\">Process %d</A></H3>\n\n", process->nr, process->nr);
+		if (process->parent != 0)
+			fprintf(f, "(Executed by <A HREF=\"#S%d\">Process %d</A>)\n", process->parent->nr, process->parent->nr);
+		fprintf(f, "<UL>\n");
+		
+		if (process->nr == 731)
+		{
+			Source *sources = 0;
+			//fprintf(fout, "Process %d\n", process->nr);
+			collect_sources(process, &sources);
+			
+			fprintf(f, "<P>Sources used:\n<UL>\n");
+			for (Source *source = sources; source != 0; source = source->next)
+				fprintf(f, "<LI> %s\n", source->url);
+			fprintf(f, "</UL>\n");
+		}
+	}
+		
+	fprintf(f, "<H2><A NAME=\"Input\">Input source files</A></H2>\n\n");
+	
+	for (File *file = files; file != 0; file = file->next)
+		if (file->used_as_input()) //(file->is_source && !file->exec_before_created())
+			write_html_file(f, file, false); 
+
+	fprintf(f, "\n<H2><A NAME=\"Output\">Output files</A></H2>\n\n\n");
+ 
+ 	for (int t = 0; t < 3; t++)
+ 	{
+ 		switch (t)
+ 		{
+ 			case 0: fprintf(f, "Executables files:\n<UL>\n"); break;
+ 			case 1: fprintf(f, "Intermediary files (not from sources and used):\n<UL>\n"); break;
+ 			case 2: fprintf(f, "Produced (not from source and also not used):\n<UL>\n"); break;
+ 		}
+		for (File *file = files; file != 0; file = file->next)
+			if (!file->used_as_input() && !file->exec_before_created())
+			{
+				bool used = false;
+				bool executed = false;
+				unsigned long mode = 0;
+				int process_nr = -1;
+				for (Action *action = file->actions; action != 0; action = action->next_on_file)
+				{
+					if (action->kind == 'e')
+						executed = true;
+					else if (action->kind == 'o')
+					{
+						if (action->o_creat || action->o_wronly)
+						{
+							mode = action->mode;
+							process_nr = action->process->nr;
+						}
+						else if (action->o_rdonly || (action->o_rdwr && !action->o_trunc))
+							used = true;
+					}
+					else if (action->kind == 'r')
+					{
+						used = false;
+						executed = false;
+						process_nr = -1;
+					}
+					else if (action->kind == 'c')
+					{
+						mode = action->mode;
+					}
+				}
+				if (process_nr != -1)
+				{
+					bool is_executable = (mode & 0700) == 0700;
+					if (   (t == 0 && is_executable)
+						|| (t == 1 && file->url == 0 && !is_executable && used)
+						|| (t == 2 && file->url == 0 && !is_executable && !used))
+					{
+						fprintf(f, "<LI> %s", file->name);
+						if (process_nr > 0)
+							fprintf(f, " produced by <A HREF=\"#S%d\">Process %d</A>", process_nr, process_nr);
+						if (mode != 0 && mode != 0600 && mode != 0700)
+							fprintf(f, " (mode is %lo)", mode);
+						if (executed)
+							fprintf(f, " (also executed)");
+						fprintf(f, "\n");
+					}
+				}
+			}
+		fprintf(f, "</UL>\n\n");
+	}
+
+	fprintf(f, "\n<H2><A NAME=\"Parser\">Parse program</A></H2>\n\n");
+	fprintf(f, "Below the Bash script <TT>run_chroot</TT> to produce the <TT>trace.txt</TT> file.\n<P>\n");
+	output_file(f, fopen("run_chroot", "r"), false);
+	fprintf(f, "Below the version of the <TT>scan_trace.cpp</TT> program is given that is used to produce this page.\n<P>\n");
+	output_file(f, fopen("scan_trace.cpp", "r"), false);
+	
+	fprintf(f,
+		"\n\n"
+		"<P><HR>\n"
+		"<ADDRESS>\n"
+		"<A HREF=\"index.html\">Home</A>\n"
+		"</ADDRESS>\n"
+		"</BODY></HTML>\n");
+}
+
 int main(int argc, char *argv[])
 {
 	len_source_dir = strlen(source_dir);
@@ -1293,6 +1633,13 @@ int main(int argc, char *argv[])
 	{
 		write_html(f_html);
 		fclose(f_html);
+	}
+	
+	FILE *f_json = fopen("docs/data.js", "w");
+	if (f_json != 0)
+	{
+		write_json(f_json);
+		fclose(f_json);
 	}
 	
 	return 0;

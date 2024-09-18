@@ -1,0 +1,851 @@
+<HTML><HEAD>
+<TITLE>live-bootstrap: T-diagram</TITLE>
+<style>
+body {
+  overflow-y: scroll; /* Show scrollbars */
+}
+</style>
+</HEAD><BODY BGCOLOR="#E0E0E0">
+<SCRIPT LANGUAGE="JavaScript" SRC="data.js"></SCRIPT>
+
+
+<H1>live-bootstrap: T-diagram</H1>
+
+Below the <A HREF="https://en.wikipedia.org/wiki/Tombstone_diagram">T-diagram</A>
+that is generated based on data that is generated with the <A HREF="https://github.com/FransFaase/Emulator/blob/main/scan_trace.cpp"
+><TT>scan_trace.cpp</TT></A>, which parses the <TT>trace.txt</TT> file that is produced by
+running the <TT>run_chroot</TT> Bash script from a sibling directory of a clone of
+<A HREF="https://github.com/fosslinux/live-bootstrap">fosslinux/live-bootstrap</A>
+(the commit <A HREF="https://github.com/fosslinux/live-bootstrap/commit/71ff0a0481992c79347a57f622f3f091a985f67a"><TT>71ff0a04</TT></A>)
+in which the <A HREF="https://github.com/fosslinux/live-bootstrap/blob/71ff0a0481992c79347a57f622f3f091a985f67a/download-distfiles.sh"
+><TT>download-distfiles.sh</TT></A> script has been executed as well.
+<P>
+
+<canvas id="canvas" width="900" height="520">
+This text is displayed if your browser does not support HTML5 Canvas.
+</canvas>
+<DIV ID="details"></DIV>
+
+<SCRIPT><!--
+
+var can = document.getElementById("canvas")
+var ctx = can.getContext("2d")
+ctx.canvas.width = window.innerWidth - 20
+
+var details = document.getElementById("details")
+
+file_ext = function(file)
+{
+	var name = file.name
+	if (name == "/kaem.x86")
+		return "kaem"
+	if (name.indexOf("/M2-Mesoplanet-000000") > 0)
+		return "c"
+	if (name.indexOf("/M2-Planet-000000") > 0 || name.indexOf("/blood-elf-000000") > 0)
+		return "M1"
+	if (name.indexOf("/M1-macro-000000") > 0)
+		return "hex2"
+	if (name.indexOf("/tcc-boot0") > 0)
+		return "elf"
+	var last_pt = name.lastIndexOf(".")
+	if (last_pt == -1)
+		return ""
+	var last_sl = name.lastIndexOf("/")
+	if (last_sl > last_pt)
+		return ""
+	return name.substring(last_pt + 1)
+}
+file_name = function(name)
+{
+	var last_sl = name.lastIndexOf("/")
+	return last_sl == -1 ? name : name.substring(last_sl + 1)
+}
+
+file_ref = function(action, by, proc)
+{
+	var name = data.files[action.file].name
+	var label = file_name(name)
+	var w = ctx.measureText(label).width
+	var out = null
+	var file = data.files[action.file]
+	file.w = w
+	if (by != undefined)
+	{
+		var by_proc = data.processes[by - 1]
+		//console.log("Find output of " + name + " as output of " + by_proc.nr + " outs " + by_proc.outs.length)
+		for (var i = 0; i < by_proc.outs.length; i++)
+		{
+			//console.log("Try " + by_proc.outs[i].file.name)
+			if (by_proc.outs[i].file.nr == file.nr)
+			{
+				//console.log("found")
+				out = by_proc.outs[i]
+				break
+			}
+		}
+	}
+	return { name:name, label:label, x:null, y:null, w:w, out:out, proc:proc, file:file }
+}
+
+for (var i = 0; i < data.files.length; i++)
+	data.files[i].label = file_name(data.files[i].name)
+	
+var n = data.processes.length
+for (var i = 0; i < n; i++)
+{
+	var process = data.processes[i]
+	var actions = process.actions
+	var nr_outputs = 0
+	var in_exts = []
+	var out_exts = []
+	for (var a_i = 0; a_i < actions.length; a_i++)
+	{
+		var action = actions[a_i]
+		if (action.kind == 'R')
+		{
+			process.ins.push(file_ref(action, action.by, null))
+			var ext = file_ext(data.files[action.file])
+			if (ext != "" && !in_exts.includes(ext))
+				in_exts.push(ext)
+		}
+		else if (action.kind == 'e')
+			process.elf = file_ref(action, action.by, null)
+		else if (actions[a_i].kind == 'W')
+		{
+			process.outs.push(file_ref(action, undefined, process))
+			var ext = file_ext(data.files[action.file])
+			if (ext != "" && !out_exts.includes(ext))
+				out_exts.push(ext)
+		}
+	}
+	if (in_exts.length > 0)
+	{
+		process.ie = in_exts.join(",")
+		process.iw = ctx.measureText(process.ie).width + 2
+	}
+	if (process.outs.length > 0)
+	{
+		if (out_exts.length == 0)
+			process.oe = "elf"
+		else if (out_exts.length > 2)
+			process.oe = "*"
+		else
+			process.oe = out_exts.join(",")
+		process.ow = ctx.measureText(process.oe).width + 2
+	}
+	//else if (outputs.length > 1)
+	//	console.log("Process "+process.nr+" has "+outputs.length+" outputs: " + outputs.join(" "))
+}
+
+used_as_input = function(file)
+{
+	for (var i = 0; i < file.actions.length; i++)
+		if (file.actions[i].kind == 'R')
+			return true
+	return false
+}
+
+has_child_processes = function(process)
+{
+	for (var a_i = 0; a_i < process.actions.length; a_i++)
+		if (process.actions[a_i].kind == 'E')
+			return true
+	return false
+}
+
+hide_process = function(process) { return process.outs.length == 0 /*&& process.ins.length == 0*/ && !has_child_processes(process); }
+
+var x = 0
+var y = 0
+var elf_length = ctx.measureText("elf").width
+var seed_y = 60
+for (var i = 0; i < n; i++)
+{
+	var process = data.processes[i]
+	var executes_processes = has_child_processes(process)
+	if (hide_process(process))
+		continue
+	
+	if (process.parent != null)
+	{
+		var parent = data.processes[process.parent - 1]
+		var top_y = parent.y - parent.h - 20
+		if (y > top_y)
+			y = top_y
+	}
+	process.x = x
+	process.y = y
+	//if (process.elf != null && process.elf.file != undefined && process.elf.y == 0)
+	//{
+	//	console.log(process.elf.file)
+	//}
+	//var show = process.nr == 3
+	var start_y = y
+	//if (show) console.log("y = " + y)
+	if (process.elf != null && process.elf.out == null && process.elf.file.y == 0)
+	{
+		process.elf.file.y = seed_y
+		process.elf.file.x = x
+		process.elf.file.w = ctx.measureText(process.elf.label).width
+		seed_y -= 20
+	}
+	x += elf_length / 2 + process.ow + 12
+	var x_text = x
+	if (process.outs.length == 0)
+	{
+		// - process has no output
+		x += 20
+		y -= 30
+	}
+	else if (process.outs.length > 1)
+	{
+		var last_x_center = 0
+		for (var o_i = 0; o_i < process.outs.length; o_i++)
+		{
+			var out = process.outs[o_i]
+			var file = out.file
+			var a_i = file.actions.length - 1
+			for (; a_i >= 0; a_i -= 1)
+			{
+				var action = file.actions[a_i]
+				if (action.kind == 'W' && action.proc == process.nr)
+					break
+			}
+			var is_used = false
+			for (a_i++; a_i < file.actions.length; a_i++)
+			{
+				var action = file.actions[a_i]
+				if (action.kind == 'W')
+					break
+				if (action.proc != process.nr && (action.kind == 'R' || action.kind == 'e') && !hide_process(data.processes[action.proc - 1]))
+				{
+					is_used = true
+					break
+				}
+			}
+			if (is_used)
+			{
+				var out_name = file_name(out.name)
+				var out_name_w = ctx.measureText(out_name).width
+				x_text = x + out_name_w + 1
+				x += out_name_w / 2
+				last_x_center = x
+				out.x = x
+				out.y = y
+				x += out_name_w / 2 + 12
+			}
+		}
+		y -= 30
+		for (var i2 = i + 1; i2 < n; i2++)
+			if (!hide_process(data.processes[i2]))
+			{
+				x = Math.max(x, last_x_center + data.processes[i2].iw + elf_length / 2 + 12)
+				break
+			}
+	}
+	else
+	{
+		var out = process.outs[0]
+		//if (show) console.log("has output")
+		var out_name = file_name(out.name)
+		var out_name_w = ctx.measureText(out_name).width
+		x_text = x + out_name_w + 1
+		x += out_name_w / 2
+		out.x = x
+		out.y = y
+		var next_process = null
+		for (var i2 = i + 1; i2 < n; i2++)
+			if (!hide_process(data.processes[i2]))
+			{
+				next_process = data.processes[i2]
+				break
+			}
+		var extra_closed = 0
+		if (next_process != null && process.parent != undefined && next_process.parent != process.parent && next_process.parent != process.nr)
+		{
+			for (var parent_proc = process.parent; parent_proc != null; parent_proc = data.processes[parent_proc - 1].parent)
+			{
+				if (parent_proc == next_process.parent)
+					break
+				extra_closed += 10
+			}
+		}
+		//if (show) console.log("Next process "+next_process.nr+" ins "+next_process.ins.length+" exe_proc "+executes_processes)
+		//if (show && next_process.ins.length == 1) console.log(next_process.ins[0].out)
+		if (next_process != null && next_process.ins.length == 1 && next_process.ins[0].out != null && next_process.ins[0].out.proc == process && !executes_processes)
+		{
+			//if (show) console.log("A")
+			// - the output is the only input for the next process
+			x += out_name_w / 2 + 12 + next_process.iw + elf_length / 2 + extra_closed
+		}
+		else if (next_process != null && next_process.elf.out != null && next_process.elf.out.proc == process && !used_as_input(out.file))
+		{
+			//if (show) console.log("B")
+			y -= 30
+		}
+		else
+		{
+			//if (show) console.log("C")
+			y -= 30
+			x += Math.max(out_name_w / 2 + extra_closed, next_process != null ? next_process.iw + elf_length / 2 : 0) + 12
+		}
+	}
+	if (executes_processes)
+		y -= 10
+	//if (show) console.log("y = " + y + " diff " + (start_y - y))
+	var extra = 0
+	for (var parent_proc = process.parent; parent_proc != null; parent_proc = parent_proc.parent)
+	{
+		//console.log("parent " + parent_proc)
+		parent_proc = data.processes[parent_proc - 1]
+		var prev_w = parent_proc.w
+		parent_proc.w = x_text + extra - parent_proc.x + parent_proc.iw + elf_length / 2 + 8
+		if (prev_w >= 0 && parent_proc.w < 0)
+		{
+			//console.log(process.nr + " " + parent_proc.w + " = " + x_text + " + " + extra + " - " + parent_proc.x + " + " + parent_proc.iw + " + " + elf_length + " / 2 + 2")
+			//console.log(parent_proc)
+		}
+		parent_proc.h = parent_proc.y - y + extra - 20
+		extra += 10
+	}
+	//console.log(x + "," + y)
+	
+	var in_text_x = process.x - process.iw - elf_length / 2
+	for (var i_i = 0; i_i < process.ins.length; i_i++)
+	{
+		var in_file = process.ins[i_i]
+		if (in_file.out != null && in_file.out.x < in_text_x)
+			in_text_x = in_file.out.x
+	}
+	for (var i_i = process.ins.length - 1; i_i >= 0; i_i -= 1)
+	{
+		var in_file = process.ins[i_i]
+		if (in_file.out == null)
+		{
+			var repeated = false
+			for (var i2 = 0; i2 < i_i; i2++)
+				if (in_file.file == process.ins[i2].file)
+				{
+					repeated = true
+					break
+				}
+			if (!repeated)
+			{
+				in_text_x -= 20 + in_file.w / 2 + 2
+				in_file.x = in_text_x
+				in_text_x -= in_file.w / 2 + 2
+			}
+		}
+	}
+	//ctx.strokeStyle = "black"
+}
+
+var sf = 1
+var dx = 100
+var dy = 420
+
+moveTo = function(x, y) { ctx.moveTo(dx + sf * x, dy + sf * y) }
+lineTo = function(x, y) { ctx.lineTo(dx + sf * x, dy + sf * y) }
+arcTo = function(x1, y1, x2, y2, r)  { ctx.arcTo(dx + sf * x1, dy + sf * y1, dx + sf * x2, dy + sf * y2, sf * r) }
+fillText = function(text, x, y) { ctx.fillText(text, dx + sf * x, dy + sf * y) }
+
+drawT = function(proc)
+{
+	if (proc.x == null)
+		return
+	var ewidth = elf_length / 2 + 2
+	var lwidth = proc.iw + ewidth
+	var rwidth = proc.ow + ewidth
+	var twidth = 30 + ewidth
+	var x = proc.x
+	var y = proc.y
+	ctx.beginPath()
+	moveTo(x - lwidth, y - 10)
+	lineTo(x + rwidth, y - 10)
+	lineTo(x + rwidth, y + 2)
+	lineTo(x + ewidth, y + 2)
+	lineTo(x + ewidth, y + 14)
+	lineTo(x - ewidth, y + 14)
+	lineTo(x - ewidth, y + 2)
+	lineTo(x - lwidth, y + 2)
+	ctx.closePath()
+	ctx.stroke()
+	fillText(proc.nr, x, y - 14)
+	fillText("elf", x, y + 12)
+	ctx.textAlign = "right"
+	fillText(proc.ie, x - ewidth, y)
+	ctx.textAlign = "left"
+	fillText(proc.oe, x + ewidth, y)
+	ctx.textAlign = "center"
+	var text_x = x + rwidth
+	for (var i = 0; i < proc.outs.length; i++)
+	{
+		var out = proc.outs[i]
+		if (out.x > 0)
+		{
+			ctx.beginPath()
+			moveTo(text_x, y - 3)
+			lineTo(out.x - out.w / 2 - 2, y - 3)
+			ctx.stroke()
+			text_x = out.x + out.w / 2 + 2
+			fillText(out.label, out.x, out.y)
+		}
+	}
+	if (proc.w != 0 && proc.h != 0)
+	{
+		//console.log(proc.w + " " + proc.h)
+		ctx.strokeStyle = "green" //"#E0E0E0"
+		ctx.beginPath()
+		moveTo(x - lwidth, y - 10)
+		lineTo(x - lwidth, y - 10 - proc.h)
+		lineTo(x - lwidth + proc.w, y - 10 - proc.h)
+		lineTo(x - lwidth + proc.w, y - 10)
+		lineTo(x + rwidth, y - 10)
+		ctx.stroke()
+		ctx.strokeStyle = "black"
+	}
+	if (proc.elf.out != null)
+	{
+		var out = proc.elf.out
+		ctx.beginPath()
+		if (out.x == x)
+			moveTo(out.x, out.y - 8)
+		else
+		{
+			moveTo(out.x + out.w/2 + 2, out.y - 3)
+			lineTo(x - 10, out.y - 3)
+			arcTo(x, out.y - 3, x, out.y - 13, 10)
+		}
+		lineTo(x, y + 14)
+		ctx.stroke()
+	}
+	else if (proc.elf.file != undefined)
+	{
+		ctx.beginPath()
+		moveTo(proc.elf.file.x, proc.elf.file.y - 9)
+		if (proc.elf.file.x < x)
+		{
+			arcTo(proc.elf.file.x, proc.elf.file.y - 19, proc.elf.file.x + 10, proc.elf.file.y - 19, 10)
+			lineTo(x - 10, proc.elf.file.y - 19)
+			arcTo(x, proc.elf.file.y - 19, x, proc.elf.file.y - 29, 10)
+		}
+		lineTo(x, y + 14)
+		ctx.stroke()
+	}
+	//var in_text_x = x - lwidth
+	for (var i = 0; i < proc.ins.length; i++)
+	{
+		var in_file = proc.ins[i]
+		if (in_file.out != null)
+		{
+			ctx.beginPath()
+			if (in_file.out.y == y)
+				moveTo(in_file.out.x + in_file.out.w / 2 + 2, in_file.out.y - 3)
+			else
+			{
+				moveTo(in_file.out.x, in_file.out.y - 10)
+				lineTo(in_file.out.x, y + 7)
+				arcTo(in_file.out.x, y - 3, in_file.out.x + 10, y - 3, 10)
+			}
+			lineTo(x - lwidth, y - 3)
+			ctx.stroke()
+			//if (in_file.out.x < in_text_x)
+			//	in_text_x = in_file.out.x
+		}
+	}
+	var prev_x = x - lwidth
+	for (var i = proc.ins.length - 1; i >= 0; i -= 1)
+	{
+		var in_file = proc.ins[i]
+		if (in_file.x != null)
+		{
+			ctx.beginPath()
+			moveTo(prev_x, y - 3)
+			lineTo(in_file.x + in_file.w / 2 + 2, y - 3)
+			ctx.stroke()
+			//in_text_x -= in_file.w / 2 + 2
+			fillText(in_file.label, in_file.x, y)
+			//in_file.x = in_text_x
+			//in_text_x -= in_file.w / 2 + 2
+			prev_x = in_file.x - in_file.w / 2 - 2
+		}
+	}
+	//ctx.strokeStyle = "black"
+}
+
+connectSeed = function(seed_file_label, elf_file_label)
+{
+	var seed_file = null
+	for (var i = 0; i < data.files.length; i++)
+		if (data.files[i].type == "seed" && data.files[i].label == seed_file_label)
+		{
+			seed_file = data.files[i]
+			break
+		}
+	var elf_file = null
+	for (var i = 0; i < data.processes.length; i++)
+		if (data.processes[i].outs.length == 1 && data.processes[i].outs[0].label == elf_file_label)
+		{
+			elf_file = data.processes[i].outs[0]
+			break
+		}
+	//if (seed_file == null) console.log("seed_file == null")
+	//if (elf_file == null) console.log("elf_file == null")
+	if (seed_file != null && elf_file != null)
+	{
+		ctx.strokeStyle = "red"
+		ctx.beginPath()
+		moveTo(elf_file.x, elf_file.y + 2)
+		lineTo(elf_file.x, seed_file.y - 13)
+		arcTo(elf_file.x, seed_file.y - 3, elf_file.x - 10, seed_file.y - 3, 10)
+		lineTo(seed_file.x + seed_file.w / 2 + 2, seed_file.y - 3)
+		ctx.stroke()
+	}
+}
+
+draw = function()
+{
+	ctx.fillStyle = "White"
+	ctx.beginPath()
+	ctx.rect(0, 0, can.width, can.height)
+	ctx.fill()
+	
+	ctx.lineWidth = sf
+	
+	ctx.font = Math.round(sf * 10) + "px serif";
+	ctx.strokeStyle = "black"
+	ctx.fillStyle = "black"
+	ctx.textAlign = "center"
+	
+	for (var i = 0; i < n; i++)
+		drawT(data.processes[i])
+	
+	ctx.textAlign = "center"
+	ctx.fillStyle = "red"
+	for (var i = 0; i < data.files.length; i++)
+	{
+		var file = data.files[i]
+		if (file.x > 0 || file.y > 0)
+			fillText(file.label, file.x, file.y)
+	}
+	
+	// Connect two seeds
+	connectSeed("hex0-seed", "hex0")
+	connectSeed("kaem-optional-seed", "kaem-0")
+	//drawT(40, 0, "bin", "keam", "", 1150, 440)
+	//fillText("kaem-optional-seed", 40, 30)
+	//fillText("kaem.x86", -60, 0)
+}
+
+var start_x = 0
+var start_y = 0
+var last_x = 0
+var last_y = 0
+var drag = false
+
+can.addEventListener('mousedown',function(event){
+	document.body.style.mozUserSelect = document.body.style.webkitUserSelect = document.body.style.userSelect = 'none';
+	last_x = event.offsetX || (event.pageX - can.offsetLeft)
+	last_y = event.offsetY || (event.pageY - can.offsetTop)
+	start_x = last_x
+	start_y = last_y
+	drag = true
+},false)
+
+can.addEventListener('mousemove',function(event){
+	if (drag)
+	{
+		var x = event.offsetX || (event.pageX - can.offsetLeft)
+		var y = event.offsetY || (event.pageY - can.offsetTop)
+		var d_x = x - last_x
+		var d_y = y - last_y
+		if (d_x != 0 || d_y != 0)
+		{
+			dx += d_x
+			dy += d_y
+			last_x = x
+			last_y = y
+			draw()
+		}
+	}
+},false)
+
+locate_process = function(proc_nr)
+{
+	var process = data.processes[proc_nr - 1]
+	if (process.y != null)
+	{
+		dx = can.width / 2 - process.x * sf
+		dy = can.height / 2 - process.y * sf
+		draw()
+		ctx.fillStyle = "yellow"
+		ctx.beginPath()
+		//console.log("rect "+((can.width - process.iw - elf_length / 2 - 2) * sf) / 2)+", "+((can.height - 12 * sf) / 2 - 10)+", "+(file.w * sf)+", "+(12 * sf))
+		ctx.rect(can.width / 2 - (process.iw + elf_length / 2 + 2) * sf, (can.height - 12 * sf) / 2 - 10, (process.iw + elf_length + process.ow + 4) * sf, 24 * sf)
+		ctx.fill()
+		ctx.fillStyle = "black"
+		ctx.strokeStyle = "black"
+		drawT(process)
+	}
+	show_process_details(process)
+}
+
+link_to_process = function(proc_nr)
+{
+	return "<A HREF=\"#\" onclick=\"javascript:locate_process("+proc_nr+")\">Process "+proc_nr + "</A>"
+}
+
+locate_file = function(file_nr, proc_nr, x, y)
+{
+	//console.log("locate_file "+file_nr+", "+x+", "+y)
+	var file = data.files[file_nr]
+	if (x != undefined && y != undefined)
+	{
+		dx = can.width / 2 - x * sf
+		dy = can.height / 2 - y * sf
+		draw()
+		ctx.fillStyle = "yellow"
+		ctx.beginPath()
+		//console.log("rect "+((can.width - file.w * sf) / 2)+", "+((can.height - 12 * sf) / 2 - 10)+", "+(file.w * sf)+", "+(12 * sf))
+		ctx.rect((can.width - file.w * sf) / 2, (can.height - 12 * sf) / 2 - 10, file.w * sf, 12 * sf)
+		ctx.fill()
+		ctx.fillStyle = "black"
+		fillText(file.label, x, y)
+		
+	}
+	show_file_details(file, proc_nr)
+}
+
+link_to_file = function(file, proc_nr, x, y)
+{
+	return "<A HREF=\"#\" onclick=\"javascript:locate_file("+file.nr+","+proc_nr+","+x+","+y+")\">"+file.name + "</A>"
+}
+
+show_file_details = function(file, proc_nr)
+{
+	//console.log("show_file_details " + file.nr + " " + proc_nr)
+	description = "<H2>File "+file.name+"</H2><P><UL>"
+	for (var i = 0; i < file.actions.length; i++)
+	{
+		var action = file.actions[i]
+		if (action.proc >= proc_nr)
+		{
+			if (action.kind == 'W')
+			{
+				if (action.proc > proc_nr)
+					break
+				description += "<LI>Produced by " + link_to_process(action.proc)
+			}
+			else if (action.kind == 'R')
+				description += "<LI>Input for " + link_to_process(action.proc)
+			else if (action.kind == 'e')
+				description += "<LI>Executed by " + link_to_process(action.proc)
+			else if (action.kind == 'r')
+			{
+				description += "<LI>Deleted by " + link_to_process(action.proc)
+				break
+			}
+		}
+	}
+	description += "</UL>"
+	if (file.src != undefined)
+		description += "Live-bootstrap source file is '" + file.src + "'<BR>"
+	if (file.url != undefined)
+		description += "URL: <A HREF=\"" + file.url + "\">" + file.url + "</A>"
+	
+	if (file.lines != undefined && file.lines.length > 0)
+	{
+		description += "<P><PRE>\n"
+		for (var i = 0; i < file.lines.length; i++)
+			description += file.lines[i] + "\n"
+		description += "</PRE>"
+	}
+	
+	details.innerHTML = description
+}
+
+show_process_details = function(process)
+{
+	var description = "<H2>Process "+process.nr+"</H2><P>"
+	if (process.parent != null)
+		description += "(Executed by " + link_to_process(process.parent) + ")"
+	description += "<P><UL>"
+	for (var i = 0; i < process.actions.length; i++)
+	{
+		var action = process.actions[i]
+		var file = data.files[action.file]
+		if (action.kind == 'R')
+		{
+			var x = process.x
+			var y = process.y
+			for (var i_i = 0; i_i < process.ins.length; i_i++)
+			{
+				var in_action = process.ins[i_i]
+				if (in_action.file == file)
+				{
+					if (in_action.x != null)
+					{
+						x = in_action.x
+						break
+					}
+					if (in_action.out != null)
+					{
+						x = in_action.out.x
+						y = in_action.out.y
+						break
+					}
+				}
+			}
+			description += "<LI>Uses as input " + link_to_file(file, process.nr, x, y)
+		}
+		else if (action.kind == 'e')
+		{
+			var proc_nr = 0
+			for (var i_a = 0; i_a < file.actions.length; i_a)
+			{
+				var action = file.actions[i_a]
+				if (action.proc == proc_nr)
+					break
+				else if (action.kind == 'W')
+					proc_nr = action.proc
+			}
+			description += "<LI>Executes " + link_to_file(file, proc_nr, process.elf.out.x, process.elf.out.y)
+		}
+		else if (action.kind == 'W')
+		{
+			var x = process.x
+			var y = process.y
+			for (var i_i = 0; i_i < process.outs.length; i_i++)
+			{
+				var out = process.outs[i_i]
+				if (out.file == file)
+				{
+					x = out.x
+					y = out.y
+				}
+			}
+			description += "<LI>Produces " + link_to_file(file, process.nr, x, y) + "<UL>"
+			//if (file.nr == 666) console.log("Process " + process.nr)
+			for (var i_a = 0; i_a < file.actions.length; i_a++)
+			{
+				var action = file.actions[i_a]
+				if (action.proc > process.nr)
+				{
+					if (action.kind == 'W')
+						break
+					if (action.kind == 'e')
+						description += "<LI>Used as executable " + link_to_process(action.proc)
+					else if (action.kind == 'R')
+						description += "<LI>Used as input for " + link_to_process(action.proc)
+					else if (action.kind == 'r')
+					{
+						description += "<LI>Deleted by " + link_to_process(action.proc)
+						break
+					}
+				}
+			}
+			
+			description += "</UL>"
+		}
+		else if (action.kind == 'E')
+		{
+			description += "<LI>Executes " + link_to_process(action.child)
+		}
+	}
+	details.innerHTML = "</UL>" + description
+	
+	
+}
+
+can.addEventListener('mouseup',function(event){ 
+	drag = false
+	var x = event.offsetX || (event.pageX - can.offsetLeft)
+	var y = event.offsetY || (event.pageY - can.offsetTop)
+	if (x != start_x || y != start_y)
+		return
+	//console.log("Click at "+x+", "+y + " dx: "+dx + " dy: "+dy + " sf: "+sf)
+	x = (x - dx) / sf
+	y = (y - dy) / sf
+	//console.log("Click at "+x+", "+y+" ("+(dx + sf * x)+ " "+(dy + sf * y)+ ")")
+	for (var i = 0; i < data.processes.length; i++)
+	{
+		var process = data.processes[i]
+		if (process.x != null && process.y >= y && y >= process.y - 12)
+		{
+			if (process.x - process.iw - elf_length / 2 - 2 <= x && x <= process.x + process.ow + elf_length / 2 + 2)
+			{
+				//console.log("Process "+process.nr + " y = "+process.y)
+				show_process_details(process)
+				return
+			}
+			for (var i2 = 0; i2 < process.ins.length; i2++)
+			{
+				var in_file = process.ins[i2]
+				if (in_file.out == null && in_file.x - in_file.w / 2 <= x && x <= in_file.x + in_file.w / 2)
+				{
+					//console.log("Input file: "+in_file.file.label + " " + in_file.x + " " + in_file.w)
+					show_file_details(in_file.file, process.nr)
+					return
+				}
+			}
+			for (var i2 = 0; i2 < process.outs.length; i2++)
+			{
+				var out_file = process.outs[i2]
+				if (out_file.x - out_file.w / 2 <= x && x <= out_file.x + out_file.w / 2)
+				{
+					//console.log("Ouput file: "+out_file.file.label)
+					show_file_details(out_file.file, process.nr)
+					return
+				}
+			}
+		}
+	}
+	for (var i = 0; i < data.files.length; i++)
+	{
+		var file = data.files[i]
+		if (   file.x != null && file.x - file.w / 2 <= x && x <= file.x + file.w / 2
+			&& file.y >= y && y >= file.y - 12)
+		{
+			show_file_details(file, 0)
+			return
+		}
+	}
+},false)
+can.addEventListener('mouseout',function(event){ drag = false },false);
+
+var resize_processing = 0
+window.addEventListener("resize", function(event)
+{
+	if (resize_processing == 0)
+	{
+		resize_processing++
+		ctx.canvas.width = window.innerWidth - 20
+		draw()
+		//console.log("resize body")
+		resize_processing -= 1
+	}
+},false);
+
+handleScroll = function(event)
+{
+	event.preventDefault()
+	var delta = event.wheelDelta ? event.wheelDelta/40 : event.detail ? -event.detail : 0;
+	var x = event.offsetX || (event.pageX - can.offsetLeft)
+	var y = event.offsetY || (event.pageY - can.offsetTop)
+	if (delta != 0)
+	{
+		var nsf = delta < 0 ? sf / 1.3 : sf * 1.3
+		dx = x - nsf * (x - dx) / sf
+		dy = y - nsf * (y - dy) / sf
+		sf = nsf
+		draw()
+	}
+}
+can.addEventListener('DOMMouseScroll', handleScroll, false)
+can.addEventListener('mousewheel', handleScroll, false)
+
+draw()
+
+//-->
+</SCRIPT>
+</BODY></HTML>

@@ -28,7 +28,7 @@ char *copystr(const char *v)
 	return result;
 }
 
-#define MAX_NR_MESSAGES 200
+#define MAX_NR_MESSAGES 400
 #define MAX_MESSAGE_LEN 200
 char messages[MAX_NR_MESSAGES][MAX_MESSAGE_LEN];
 int message_nr = 0;
@@ -1801,7 +1801,7 @@ public:
 							
 						case 0x8E:
 							val32 = getLongPC();
-							DO_TRACE(" jg %d\n", _flags);
+							DO_TRACE(" jle %d\n", _flags);
 							CODE_JUMP(_flags <= 0, _pc + val32)
 							break;
 							
@@ -2517,6 +2517,11 @@ public:
 						case 0x0A:
 							CODE(_process->storeByte(_edx, (byte)_ecx));
 							DO_TRACE(" mov_[edx:%08x],cl %02x\n", _edx, (byte)_ecx);
+							break;
+ 					
+						case 0x18: /* for stack_c.cpp */
+							CODE(_process->storeByte(_eax, (byte)_ebx));
+							DO_TRACE(" mov_[eax:%08x],bl %02x\n", _eax, (byte)_ebx);
 							break;
 					
 						case 0x19:
