@@ -1429,7 +1429,7 @@ void write_json(FILE *f)
 									}
 									in_line = true;
 								}
-								if (ch < ' ')
+								if (ch < ' ' && ch != '\t')
 								{
 									ch = fgetc(f_source);
 									continue;
@@ -1466,7 +1466,7 @@ void write_json(FILE *f)
 								else if (ch == '\t')
 								{
 									fprintf(f, " ");
-									while (col % 4 > 0)
+									while (col % 4 != 0)
 									{
 										fprintf(f, " ");
 										col++;
