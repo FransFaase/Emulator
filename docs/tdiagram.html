@@ -851,7 +851,14 @@ handleScroll = function(event)
 can.addEventListener('DOMMouseScroll', handleScroll, false)
 can.addEventListener('mousewheel', handleScroll, false)
 
-draw()
+var go_to_process_nr = Number.NaN
+if (location.search.substring(0, 9) == "?process=")
+	go_to_process_nr = Number.parseInt(location.search.substring(9))
+
+if (go_to_process_nr != Number.NaN)
+	locate_process(go_to_process_nr)
+else
+	draw()
 
 //-->
 </SCRIPT>
