@@ -760,8 +760,6 @@ show_process_details = function(process)
 		}
 	}
 	details.innerHTML = "</UL>" + description
-	
-	
 }
 
 can.addEventListener('mouseup',function(event){ 
@@ -855,8 +853,47 @@ var go_to_process_nr = Number.NaN
 if (location.search.substring(0, 9) == "?process=")
 	go_to_process_nr = Number.parseInt(location.search.substring(9))
 
-if (go_to_process_nr != Number.NaN)
+if (Number.isInteger(go_to_process_nr))
 	locate_process(go_to_process_nr)
+else if (location.search.substring(0, 6) == "?file=")
+{
+	var file_name = location.search.substring(6)
+	var found_file = null
+	for (var i = 0; i < data.files.length && found_file == null; i++)
+		if (data.files[i].name == file_name)
+			found_file = data.files[i]
+	for (var i = 0; i < data.files.length && found_file == null; i++)
+		if (data.files[i].label == file_name)
+			found_file = data.files[i]
+	if (found_file != null && found_file.actions.length > 0)
+	{
+		var proc_nr = found_file.actions[0].proc
+		if (found_file.x != null)
+			locate_file(found_file.nr, proc_nr, found_file.x, found_file.y)
+		else
+		{
+			var proc = data.processes[proc_nr - 1]
+			
+			var file_shown = false
+			for (var i = 0; i < proc.ins.length && !file_shown; i++)
+				if (proc.ins[i].file.nr == found_file.nr && proc.ins[i].x != null)
+				{
+					locate_file(found_file.nr, proc_nr, proc.ins[i].x, proc.y)
+					file_shown = true
+				}
+			for (var i = 0; i < proc.outs.length && !file_shown; i++)
+				if (proc.outs[i].file.nr == found_file.nr && proc.outs[i].x != null)
+				{
+					locate_file(found_file.nr, proc_nr, proc.outs[i].x, proc.y)
+					file_shown = true
+				}
+			if (!file_shown)
+				draw()
+		}
+	}
+	else
+		draw()
+}
 else
 	draw()
 
