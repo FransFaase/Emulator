@@ -1,0 +1,288 @@
+<HTML><HEAD>
+<TITLE>Verifying and documenting live-bootstrap</TITLE>
+</HEAD><BODY>
+
+<H1>Verifying and documenting live-bootstrap</H1>
+
+The goal of the <A HREF="https://github.com/fosslinux/live-bootstrap"
+>live-bootstrap project</A> is to compile the necessary tools to compile Linux
+from a minimal binary footprint to avoid the possibility that a (binary)
+compiler could be used to introduce back-doors into the Linux kernel. As a user
+of the live-bootstrap project, one should be able to trace and review all steps
+and sources used. The goal of this project is to facilitate this.
+<P>
+The results of this can be found on the following pages:
+<UL>
+<LI><A HREF="tdiagram.html">T-diagram</A>: Zoomable diagram of all the
+	processes for the x86 bootstrap process until <TT>tcc-boot0</TT>.
+<LI><A HREF="index_x86.html">x86</A>: Single page with all the information
+	about the sources, processes, and results for the x86 bootstrap process
+	until <TT>tcc-boot0</TT>.
+<LI><A HREF="index_AMD64.html">AMD64</A>: Single page with all the information
+	about the sources, processes, and results for the AMD64 bootstrap process
+	until <TT>tcc-boot0</TT>.
+</UL>
+
+<H1>Back ground and history</H1>
+
+The text is based on a presentation <A HREF="https://www.iwriteiam.nl/Frans.html"
+>I</A> gave on <A HREF="https://www.hackfest.nl/">Hackfest 2024</A> on
+<A HREF="https://www.iwriteiam.nl/D2409.html#29">Sunday, September 29, 2024</A>
+in Dutch. <A HREF="https://www.youtube.com/watch?v=eKXMwVqaauc">A
+recording</A> of the presentation on YouTube.
+
+<h2>Can we trust Linux?</h2>
+
+<a href="https://en.wikipedia.org/wiki/Linux">Linux</a> is an open-source
+operating system build from available sources. For closed source operating
+systems, like Windows and MacOS, there is no way to verify that it is reliable.
+
+<h2>Malicious compiler</h2>
+
+Although the sources of Linux are all known, building the Linux kernel a
+compiler is needed to compile the C-source files into executable of the
+target platform.
+<p>
+A compiler is a program which translates a program from an input language to
+an output language. The input language is often a high-level, human readable
+language, while the output language is a low-level language, including
+machine language, which can be executed by the CPU. A compiler, like any
+other program, is programmed in a language, usually in machine language, or
+otherwise, depends on some other program based on machine language.
+<p>
+<center><canvas id="canvas4" width="300" height="100">
+This text is displayed if your browser does not support HTML5 Canvas.
+</canvas></center>
+<script><!--
+var can4 = document.getElementById("canvas4")
+var ctx4 = can4.getContext("2d")
+
+drawT = function(ctx, x, y, in_ext, out_ext, exe_ext)
+{
+	var iw = ctx.measureText(in_ext).width
+	var ow = ctx.measureText(out_ext).width
+	var ew = ctx.measureText(exe_ext).width
+	var h = ctx.measureText(exe_ext).fontBoundingBoxAscent + 4
+	console.log(iw + " " + ow + " " + ew)
+	var ewidth = ew / 2 + 4
+	var lwidth = iw + ewidth + 4
+	var rwidth = ow + ewidth + 4
+	ctx.strokeStyle = "black"
+	ctx.fillStyle = "black"
+	ctx.beginPath()
+	ctx.moveTo(x - lwidth, y - h)
+	ctx.lineTo(x + rwidth, y - h)
+	ctx.lineTo(x + rwidth, y + 2)
+	ctx.lineTo(x + ewidth, y + 2)
+	ctx.lineTo(x + ewidth, y + h + 4)
+	ctx.lineTo(x - ewidth, y + h + 4)
+	ctx.lineTo(x - ewidth, y + 2)
+	ctx.lineTo(x - lwidth, y + 2)
+	ctx.closePath()
+	ctx.stroke()
+	ctx.textAlign = "center"
+	ctx.fillText(exe_ext, x, y + h - 4)
+	ctx.textAlign = "right"
+	ctx.fillText(in_ext, x - ewidth, y - 6)
+	ctx.textAlign = "left"
+	ctx.fillText(out_ext, x + ewidth, y - 6)
+}
+ctx4.font = "30px serif";
+drawT(ctx4, can4.width / 2, can4.height/2, "input", "output", "exe")
+
+//--></script>
+<p>
+Machine language is usually in a binary form that is not easily readable by
+humans. This poses a problem for a non-trivial program, such as an optimizing
+compiler. Although reverse engineering executables is possible, it is a lot
+of work.
+<p>
+A malicious compiler could insert a back-door in some executables or libraries
+of the Linux kernel. Such a compiler could recognize when it is compiled by
+itself and duplicate the malicious code in the resulting compiler, making it
+malicious as well.
+<p>
+<a href="https://en.wikipedia.org/wiki/Ken_Thompson">Ken Thompson</a> presented
+the idea of a malicious compiler during the Turing Award Lecture <a href="https://dl.acm.org/doi/10.1145/358198.358210"
+><i>Reflections on Trusting Trust</i></a> in 1984.
+
+<h2>The live-bootstrap approach</h2>
+
+The <a href="https://github.com/fosslinux/live-bootstrap">live-bootstrap</a>
+approach is to build the necessary tools for compiling the <a href="https://en.wikipedia.org/wiki/Tiny_C_Compiler"
+>Tiny C Compiler</a> in a number of steps from a small binary file. Next the
+Tiny C Compiler, again with many steps, is used to compile GNU C Compiler 4.0.4,
+4.7.4 (the last one written in C), 10,4.0, and finally 13.1.0. This last
+compiler can be used to compiler the Linux kerner sources.
+<p>
+For executables, Linux makes use of <a href="https://en.wikipedia.org/wiki/Executable_and_Linkable_Format"
+>Executable and Linkable Format</a> (ELF) files. These files start with a
+header, followed by the program header table, an number of code and/or data
+segments, and (optionally) a number of section header tables, which include
+symbol tables with information that can be used by a debugger.
+
+<h2>hex0</h2>
+
+The small binary is a program called hex0, which converts a file with
+hexadecimal numbers into a binary file. This program is specific for the
+target CPU for which Linux needs to be build. These programs can be found in
+the <a href="https://github.com/oriansj/bootstrap-seeds">bootstrap-seeds</a>
+repository. In the README.md file it states: '<i>NEVER TRUST ANYTHING IN
+HERE</i>'. For <a href="https://en.wikipedia.org/wiki/X86">x86</a>  (32 bits)
+the hexadecimal representation of this program is given in the file <a href="https://github.com/oriansj/stage0-posix-x86/blob/master/hex0_x86.hex0"
+>hex0_x86.hex0</a>, meaning that if this file is compiled with hex0 it will
+return hex0, assuming that it is not a malicious variant of hex0. The hex0
+program requires two arguments, the names of the input and output files. The
+function of the program can also be achieved with following command line:
+<pre>
+sed 's/[;#].*$//g' $input_file | xxd -r -p &gt; $output_file
+</pre>
+This makes use of the stream editing program <a href="https://en.wikipedia.org/wiki/Sed"
+>sed</a> and the <a href="https://en.wikipedia.org/wiki/Hex_dump">xxd</a>
+(hex dump) program that can be used to convert, in both directions, between
+binary files and hexadecimal files.
+
+<h2>Brainfuck</h2>
+
+<a href="https://en.wikipedia.org/wiki/Brainfuck">Brainfuck</a> is an esoteric
+program language with only eight commands, represented by the letters
+'+-&lt;&gt;[].,'. I wanted to see if it was possible to write a Brainfuck
+program to replace hex0. I wrote some JavaScript to generate a program from a
+simple programming language: <a href="https://www.iwriteiam.nl/BFgen.html">BF generator</a>.
+I verified that with some Brainfuck interpreter running it on hex0_x86.hex0 did
+produce a file equal to hex0.
+<p>
+Blog posts:
+<ul>
+<li><a href="https://www.iwriteiam.nl/D2105.html#4">May 4, 2021</a>
+<li><a href="https://www.iwriteiam.nl/D2105.html#11">May 11, 2021</a>
+</ul>
+
+<h2>Parsing kaem files</h2>
+
+I decided to look some deeper into live-bootstrap to figure out which programs
+are executed and which files are being read. There is a global description of
+all the steps that is found in <a href="https://github.com/fosslinux/live-bootstrap/blob/master/parts.rst"
+>parts.rst</a>. live-bootstrap comes with a script to execute all steps and a
+minimal shell, called the kaem shell, to execute the script. I wrote a
+program, <a href="https://www.iwriteiam.nl/kaem_parser_2_cpp.txt"><tt>kaem_parser.cpp</tt></a>, to parse
+the kaem files, which generates the HTML page <a href="https://www.iwriteiam.nl/livebootstrap.html"
+>live-bootstrap</a> with all the information.
+<p>
+Blog posts:
+<ul>
+<li><a href="https://www.iwriteiam.nl/D2304.html#10">April 10, 2023</a>
+<li><a href="https://www.iwriteiam.nl/D2304.html#25b">April 25, 2023</a>
+<li><a href="https://www.iwriteiam.nl/D2305.html#20">May 20, 2023</a>
+</ul>
+
+<h2>Emulator</h2>
+
+To even dive deeper, I decided to implement an x86 emulator that implements
+only the x86 instructions that are actually used. The emulator also implments
+systems calls and multiple processes. I decided to simply map file operations
+on file operations on the file system, instead of simulating those in memory.
+<p>
+This allowed me also to verify the code of hex0 and to see if no other binary
+files were used.
+<p>
+The development of the emulator required some very complicated debuging, but
+it was also insightfull.
+<p>
+The emulator turned out too be slow to compile <a href="https://nlnet.nl/project/GNUMes/"
+>GNU Mes</a>.
+<p>
+Blog posts:
+<ul>
+<li><a href="https://www.iwriteiam.nl/D2310.html#9">October 9, 2023</a>
+<li><a href="https://www.iwriteiam.nl/D2310.html#22b">October 22, 2023</a>
+<li><a href="https://www.iwriteiam.nl/D2311.html#5">November 5, 2023</a>
+<li><a href="https://www.iwriteiam.nl/D2311.html#28">November 28, 2023</a>
+<li><a href="https://www.iwriteiam.nl/D2312.html#13">December 13, 2023</a>
+<li><a href="https://www.iwriteiam.nl/D2402.html#6">February 6, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2402.html#12">February 12, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2402.html#18">February 18, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2403.html#24">March 24, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2404.html#23">April 23, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2405.html#5">May 5, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2405.html#6c">May 6, 2024</a>
+</ul>
+
+<h2>strace</h2>
+
+With <a href="https://man7.org/linux/man-pages/man1/strace.1.html">strace</a>
+command it is possible to trace system calls that are performed during the
+execution of a command. I wrote a <a href="https://github.com/FransFaase/Emulator/blob/main/run_chroot_x86"
+>shell script</a> to execute all the steps with an alternative root (using the
+<a href="https://man7.org/linux/man-pages/man2/chroot.2.html">chroot</a>
+command) and trace some relevant system calls. I also wrote a program,
+called <a href="https://github.com/FransFaase/Emulator/blob/main/scan_trace.cpp"
+>scan_trace.cpp</a> to process the produced log file and generate
+<a href="https://fransfaase.github.io/Emulator/index.html">an HTML page</a>
+listing the processes and source files. It also generates
+<a href="https://github.com/FransFaase/Emulator/blob/main/docs/data.js">a JSON
+file</a> with similar information, which is used to generate
+<a href="https://fransfaase.github.io/Emulator/tdiagram.html">a T-diagram</a>
+<p>
+<ul>
+<li><a href="https://www.iwriteiam.nl/D2405.html#12b">May 12, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2405.html#18b">May 18, 2024</a>
+</ul>
+
+<hr>
+<h2>GNU Mes</h2>
+
+<a href="https://www.gnu.org/software/mes/">GNU Mes</a> consist of <a href="https://en.wikipedia.org/wiki/Scheme_(programming_language)"
+>Scheme</a> (a dialect of the LISP family) interpreter programmed in a subset
+of C and a C compiler written in Scheme. It is a rather complete compiler
+including a separate linker. I get the idea that it is on par with the Tiny C
+compiler, which does not need a separate linker, because is not needed for
+compiling the Tiny C compiler. The MES compiler is rather slow, which is
+understandable because it is an interpreting runing an interpreting compiler.
+It is also slow because it compiles many individual C files into object files,
+which are linked at the end. Everytime all the Scheme files are loaded before
+the compiler can start its actual work.
+<p>
+The GNU Mes compiler requires a compiler for a minimal subset of C. Because of
+this the bootstrap does contain include a subset of C compiler and a a partial
+implementation of the <a href="https://en.wikipedia.org/wiki/C_preprocessor"
+>C preprocessor</a>. These are written in another subset of C for which there
+is compiler written in machine language, one for each supported CPU. I have the
+impression that the GNU Mes compiler is a bit of overkill for the gap it needs
+to fill.
+<p>
+On several forums, I have read people raising the question why Forth was not
+used in the implementation instead of LISP.
+<p>
+I made some investigation and attempts to bridge the gap. To see if it would
+be possible to implement a compiler with M2-Mesoplanet. I encountered some bugs
+in M2-Mesoplanet.
+<p>
+Blog posts:
+<ul>
+<li><a href="https://www.iwriteiam.nl/D2405.html#29">May 29, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2406.html#11">June 11, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2407.html#12b">July 12, 2024</a>
+</ul>
+
+<h2>Stack based language</h2>
+
+Due to the bugs found in M2-Mesoplanet, I looked into implementing a stack
+based, Forth like, language that would be close to C and simple to compile. A
+language that could also serve as an intermediate language. For an
+example program see <a href="https://github.com/FransFaase/MES-replacement/blob/main/test.sl"
+>test.sl</a>, which is an attempt to implement <a href="https://github.com/FransFaase/MES-replacement/blob/main/tcc_cc.c"
+>tcc_cc.c</a>. The file <a href="https://github.com/FransFaase/MES-replacement/blob/main/stack_c.cpp"
+>stack_c.cpp</a> contains the compiler for the stack based language.
+<p>
+Blog posts:
+<ul>
+<li><a href="https://www.iwriteiam.nl/D2408.html#9">August 9, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2408.html#12">August 12, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2408.html#19">August 19, 2024</a>
+<li><a href="https://www.iwriteiam.nl/D2408.html#26">August 26, 2024</a>
+</ul>
+
+
+
+</BODY></HTML>
