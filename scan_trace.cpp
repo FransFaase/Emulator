@@ -1263,6 +1263,8 @@ void write_html(FILE *f)
 		"</BODY></HTML>\n");
 }
 
+bool only_graph = false;
+
 void write_json(FILE *f)
 {
 	// calculate json_kind and file_created_by
@@ -1344,7 +1346,15 @@ void write_json(FILE *f)
 		}
 		fprintf(f, "%s}%s\n", first ? "] \n" : "\n\t  ]\n\t", process->next != 0 ? "," : "");
 	}
-	fprintf(f, "  ],\n  files:[\n");
+	fprintf(f, "  ]");
+	
+	if (only_graph)
+	{
+		fprintf(f, "}\n");
+		return;
+	}
+	
+	fprintf(f, ",\n  files:[\n");
 
 	for (File *file = files; file != 0; file = file->next)
 	{
@@ -1597,6 +1607,14 @@ void write_json(FILE *f)
 
 int main(int argc, char *argv[])
 {
+	const char *data_js_filename = "docs/data.js";
+	
+	if (argc == 3 && strcmp(argv[1], "-d") == 0)
+	{
+		only_graph = true;
+		data_js_filename = argv[2];
+	}
+	
 	len_source_dir = strlen(source_dir);
 
 	init_subModules();
@@ -1628,14 +1646,17 @@ int main(int argc, char *argv[])
 	
 	SubModule *subModules = 0;
 	
-	FILE *f_html = fopen("docs/index.html", "w");
-	if (f_html != 0)
+	if (!only_graph)
 	{
-		write_html(f_html);
-		fclose(f_html);
+		FILE *f_html = fopen("docs/index.html", "w");
+		if (f_html != 0)
+		{
+			write_html(f_html);
+			fclose(f_html);
+		}
 	}
-	
-	FILE *f_json = fopen("docs/data.js", "w");
+		
+	FILE *f_json = fopen(data_js_filename, "w");
 	if (f_json != 0)
 	{
 		write_json(f_json);
