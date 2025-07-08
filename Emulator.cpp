@@ -3323,7 +3323,7 @@ public:
 					{
 						case 0xD0:
 							CODE(_eax = ~_eax);
-							DO_TRACE(" bitwnot ebp\n", opcode, _eax);
+							DO_TRACE(" bitwnot eax\n", opcode, _eax);
 							break;
 							
 						case 0xD5:
