@@ -1346,20 +1346,17 @@ void write_json(FILE *f)
 		}
 		fprintf(f, "%s}%s\n", first ? "] \n" : "\n\t  ]\n\t", process->next != 0 ? "," : "");
 	}
-	fprintf(f, "  ]");
-	
-	if (only_graph)
-	{
-		fprintf(f, "}\n");
-		return;
-	}
-	
-	fprintf(f, ",\n  files:[\n");
+	fprintf(f, "  ],\n  files:[\n");
 
 	for (File *file = files; file != 0; file = file->next)
 	{
 		fprintf(f, "\t{ nr:%d, name:\"%s\", type:\"%s\", x:null, y:0, label:\"\", w:0", file->nr, file->name,
 				file->exec_before_created() ? "seed" : "");
+		if (!only_graph)
+		{
+			fprintf(f, "%s\n", file->next != 0 ? "," : "");
+			continue;
+		}
 		if (file->is_source && file->source_name != 0)
 			fprintf(f, ", src:\"%s\"",
 					file->source_name + (strncmp(file->source_name, source_dir, len_source_dir) == 0 ? len_source_dir : 0));
