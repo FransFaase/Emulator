@@ -1354,16 +1354,14 @@ void write_json(FILE *f)
 				file->exec_before_created() ? "seed" : "");
 		if (!only_graph)
 		{
-			fprintf(f, "%s\n", file->next != 0 ? "," : "");
-			continue;
+			if (file->is_source && file->source_name != 0)
+				fprintf(f, ", src:\"%s\"",
+						file->source_name + (strncmp(file->source_name, source_dir, len_source_dir) == 0 ? len_source_dir : 0));
+			if (file->url != 0)
+				fprintf(f, ", url:\"%s\"", file->url);
+			if (file->copy_from != 0)
+				fprintf(f, ", copy_from:%d", file->copy_from->nr);
 		}
-		if (file->is_source && file->source_name != 0)
-			fprintf(f, ", src:\"%s\"",
-					file->source_name + (strncmp(file->source_name, source_dir, len_source_dir) == 0 ? len_source_dir : 0));
-		if (file->url != 0)
-			fprintf(f, ", url:\"%s\"", file->url);
-		if (file->copy_from != 0)
-			fprintf(f, ", copy_from:%d", file->copy_from->nr);
 		fprintf(f, ", actions:[");
 		bool first = true;
 		Action *prev_action = 0;
@@ -1377,7 +1375,7 @@ void write_json(FILE *f)
 			prev_action = action;
 		}
 		fprintf(f, "%s]", first ? "" : "\n\t  ");
-		if (file->is_source && file->source_name != 0)
+		if (file->is_source && file->source_name != 0 && !only_graph)
 		{
 			size_t len = strlen(file->source_name);
 			
