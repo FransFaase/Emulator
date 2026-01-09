@@ -1,0 +1,21 @@
+#! /bin/bash
+
+rm -rf rootfs
+mkdir rootfs
+cd rootfs
+cp -r -t . ../../live-bootstrap/seed/stage0-posix/*
+cp -rf -t . ../../live-bootstrap/seed/*.kaem
+cp -r -t . ../../live-bootstrap/seed/*.checksums
+cp -r -t . ../../live-bootstrap/seed/*.c
+cp -r -t . ../../live-bootstrap/steps
+mkdir external
+cd external
+mkdir distfiles
+cd ..
+cp -r -t external/distfiles ../../live-bootstrap/distfiles/mes-0.27.1.tar.gz
+cp -r -t external/distfiles ../../live-bootstrap/distfiles/tcc*
+cp -r -t external/distfiles ../../live-bootstrap/distfiles/nyacc-1.00.2-lb1.tar.gz
+cp ../replacement/steps/bootstrap.cfg steps
+cp -f ../manifest_for_tcc steps/manifest
+cd ..
+sudo chroot rootfs /bootstrap-seeds/POSIX/x86/kaem-optional-seed
