@@ -92,7 +92,6 @@ void read_sub_modules(const char *fn, char *modules_dir)
 			//fprintf(fout, "Head file: '%s': %s\n", modules_dir, commit);
 			sprintf(m_path, "%s/modules/", path + 8);
 
-			int len = strlen(url);
 			char complete_url[MAX_FILENAME_LEN+1];
 			if (strncmp(url + 7, "https://github.com/", 19) == 0)
 			{
@@ -591,8 +590,6 @@ bool process_trace_file(const char *trace_fn)
 {
 	FILE *f = fopen(trace_fn, "r");
 	
-	FILE *fout_usage = 0;
-	
 	char buffer[10000];
 	
 	struct Command
@@ -626,6 +623,11 @@ bool process_trace_file(const char *trace_fn)
 		char *s = buffer;
 		unsigned long pid = read_unsigned_long(s);
 		Process *process = line_nr == 9 ? next_process(pid) : find_process(pid);
+		if (process == NULL)
+		{
+			printf("Line %ld: Did not process for %lu\n", line_nr, pid);
+			process = next_process(pid);
+		}
 		
 		while (*s == ' ' || *s == '\t')
 			s++;
@@ -701,7 +703,7 @@ bool process_trace_file(const char *trace_fn)
 		{
 			read_filename(filename, s);
 			File *exec_file = get_file(filename);
-			Action *action = new Action(exec_file, process, 'e');
+			new Action(exec_file, process, 'e');
 			if (strcmp(filename, "/usr/bin/tcc-boot0") == 0)
 			{
 				fprintf(fout, "Stop at %lu: %s\n", pid, s);
@@ -709,7 +711,7 @@ bool process_trace_file(const char *trace_fn)
 			}
 			exec_file->init_source();
 		}
-		else if (accept_string("open(", s))
+		else if (accept_string("open(", s) || accept_string("openat(AT_FDCWD, ", s))
 		{
 			read_filename(filename, s);
 			//fprintf(fout, "open %s", s);
@@ -735,6 +737,9 @@ bool process_trace_file(const char *trace_fn)
 					o_trunc = true;
 				else if (accept_string("O_EXCL", s))
 					o_excl = true;
+				else if (   accept_string("O_NONBLOCK", s) || accept_string("O_CLOEXEC", s)
+					     || accept_string("O_DIRECTORY", s) || accept_string("O_NOCTTY", s))
+					;
 				else
 				{
 					fprintf(fout, "Unknown %s", s);
@@ -851,6 +856,10 @@ bool process_trace_file(const char *trace_fn)
 		}
 		else if (accept_string("--- SIGCHLD ", s))
 		{
+		}
+		else if (accept_string("fcntl(", s))
+		{
+			// just ignore
 		}
 		else
 		{
@@ -1367,7 +1376,7 @@ void write_json(FILE *f)
 		Action *prev_action = 0;
 		for (Action *action = file->actions; action != 0; action = action->next_on_file)
 		{
-			if (prev_action == 0 || prev_action->json_kind != prev_action->json_kind || action->process->nr != prev_action->process->nr)
+			if (prev_action == 0 || action->json_kind != prev_action->json_kind || action->process->nr != prev_action->process->nr)
 			{
 				fprintf(f, "%s\n\t\t{ kind:\"%c\", proc:%d }", first ? "" : ",", action->json_kind, action->process->nr);
 				first = false;
@@ -1638,8 +1647,6 @@ int main(int argc, char *argv[])
 	}
 		
 
-	
-	SubModule *subModules = 0;
 	
 	if (!only_graph)
 	{
